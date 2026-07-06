@@ -14,8 +14,9 @@ Press a hotkey, select a region, and the link (or the image itself) is on your c
 
 </div>
 
-<!-- Replace with a real demo GIF/screenshot -->
-<!-- ![Demo](docs/screenshots/demo.gif) -->
+<p align="center">
+  <img src="docs/screenshots/results.png" alt="ClipToAll Results window — uploaded screenshot with link on the clipboard" width="820">
+</p>
 
 ## What it is
 
@@ -45,6 +46,16 @@ The backend currently uses Win32 APIs for screen capture, clipboard, the region-
 - **Clipboard encryption** — optional AES-256 encrypt/decrypt of clipboard text.
 - **Plugin system** — extend capture with external tools or scripts (Python / C# / PowerShell / native exe). See [plugins/PLUGIN-PROTOCOL.md](plugins/PLUGIN-PROTOCOL.md).
 - **Tray-resident** — autorun, single-instance, minimal footprint.
+
+## Screenshots
+
+| Settings — General | Settings — Storage |
+|---|---|
+| ![General settings](docs/screenshots/settings-general.png) | ![Storage settings](docs/screenshots/settings-storage.png) |
+
+| Plugins | Script editor | AI instructions |
+|---|---|---|
+| ![Plugins tab](docs/screenshots/settings-plugins.png) | ![Script editor](docs/screenshots/script-editor.png) | ![AI instructions](docs/screenshots/ai-instructions.png) |
 
 ## Quick start (build from source)
 
