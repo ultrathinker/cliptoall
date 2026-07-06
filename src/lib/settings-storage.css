@@ -1,0 +1,81 @@
+  /* Radio row */
+  .radio-row {
+    display: flex;
+    gap: 30px;
+    margin-bottom: 18px;
+  }
+
+  .radio-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 9.5pt;
+    color: var(--text-main);
+    cursor: pointer;
+  }
+
+  .radio-label input[type="radio"] {
+    accent-color: var(--accent);
+  }
+
+  /* Storage fields */
+  .storage-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .field-row.two-col {
+    display: flex;
+    gap: 16px;
+  }
+
+  .field-pair {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+  }
+
+  .field-label {
+    width: 120px;
+    text-align: right;
+    font-size: 9.5pt;
+    color: var(--text-main);
+    flex-shrink: 0;
+  }
+
+  .field-label-short {
+    width: 70px;
+    text-align: right;
+    font-size: 9.5pt;
+    color: var(--text-main);
+    flex-shrink: 0;
+  }
+
+  .field-with-btn {
+    display: flex;
+    gap: 6px;
+    flex: 1;
+    align-items: center;
+  }
+
+  /* Google Drive section */
+  .gdrive-connect-row {
+    margin-top: 4px;
+  }
+
+  .gdrive-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .gdrive-status {
+    font-size: 9pt;
+    color: var(--text-dim);
+  }
+
+  .gdrive-status.connected {
+    color: #4caf50;
+  }

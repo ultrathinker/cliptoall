@@ -1,0 +1,42 @@
+# Node
+node_modules/
+dist/
+*.log
+
+# Rust
+src-tauri/target/
+# Cargo.lock IS committed for this application (reproducible builds).
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.exe
+*.msi
+*.dmg
+*.deb
+*.AppImage
+
+# AI assistant / local tooling configs (not for the public repo)
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+QWEN.md
+.claude/
+.gemini/
+.qwen/
+.mcp.json
+
+# Local build helpers / scratch
+*-build.bat
+build-now.bat
+tauri-build-out.log
+.env
+.env.*

@@ -1,0 +1,9 @@
+[package]
+name = "cliptoall-plugin-template"
+version = "1.0.0"
+edition = "2021"
+description = "Template for ClipToAll plugins — copy this to create your own"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

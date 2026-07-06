@@ -1,0 +1,89 @@
+  /* General: checkboxes left, controls right */
+  .general-layout {
+    display: flex;
+    gap: 24px;
+  }
+
+  .general-left {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1;
+    justify-content: center;
+  }
+
+  .general-right {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 210px;
+    flex-shrink: 0;
+  }
+
+  .cb-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 9.5pt;
+    color: var(--text-main);
+    cursor: pointer;
+  }
+
+  .cb-label input[type="checkbox"] {
+    accent-color: var(--accent);
+  }
+
+  .control-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .control-label {
+    font-size: 8pt;
+    color: var(--text-dim);
+    letter-spacing: 0.3px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .hotkey-input {
+    background: var(--bg-input);
+    color: var(--text-main);
+    border: 1px solid var(--border);
+    padding: 4px 14px;
+    border-radius: 4px;
+    font-size: 9.5pt;
+    height: 28px;
+    min-width: 120px;
+    text-align: center;
+    cursor: pointer;
+    font-family: 'Segoe UI', sans-serif;
+  }
+
+  .hotkey-input:hover {
+    border-color: var(--accent);
+  }
+
+  .hotkey-input.listening {
+    border-color: var(--accent);
+    animation: pulse-border 1s ease-in-out infinite;
+    cursor: default;
+  }
+
+  .hotkey-input.listening::placeholder {
+    color: var(--accent);
+  }
+
+  .hotkey-error {
+    font-size: 8.5pt;
+    color: #e74c3c;
+  }
+
+  /* Checkbox row wrapper for ? button alignment */
+  .cb-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }

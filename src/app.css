@@ -1,0 +1,85 @@
+@import 'tailwindcss';
+@source "../src/**/*.svelte";
+@source "../src/**/*.ts";
+
+/* Theme CSS variables — in base layer so utilities can override */
+@layer base {
+  :root {
+    --bg-base: rgb(26, 15, 21);
+    --bg-surface: rgb(37, 19, 29);
+    --bg-input: rgb(71, 25, 47);
+    --accent: rgb(200, 50, 90);
+    --accent-hover: rgb(170, 40, 75);
+    --accent-dim: rgb(84, 22, 47);
+    --text-main: rgb(230, 225, 232);
+    --text-dim: rgb(170, 158, 175);
+    --border: rgb(103, 57, 74);
+    --bg-toolbar: rgb(155, 140, 160);
+  }
+
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 9.5pt;
+    background: var(--bg-base);
+    color: var(--text-main);
+  }
+
+  input[type="text"],
+  input[type="password"],
+  select {
+    background: var(--bg-input);
+    color: var(--text-main);
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-family: 'Segoe UI', sans-serif;
+    font-size: 9.5pt;
+  }
+
+  input[type="text"]:focus,
+  input[type="password"]:focus,
+  select:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  label {
+    color: var(--text-main);
+    font-size: 9.5pt;
+  }
+}
+
+/* Component styles — above base, below utilities */
+@layer components {
+  .btn-primary {
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 6px 16px;
+    border-radius: 4px;
+    font-family: 'Segoe UI Semibold', 'Segoe UI', sans-serif;
+    font-size: 9pt;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  .btn-primary:hover {
+    background: var(--accent-hover);
+  }
+
+  .btn-secondary {
+    background: var(--bg-input);
+    color: var(--text-main);
+    border: 1px solid var(--border);
+    padding: 6px 16px;
+    border-radius: 4px;
+    font-family: 'Segoe UI', sans-serif;
+    font-size: 9.5pt;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .btn-secondary:hover {
+    border-color: var(--accent);
+  }
+}

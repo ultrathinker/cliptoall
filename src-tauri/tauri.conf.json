@@ -1,0 +1,37 @@
+{
+  "productName": "ClipToAll",
+  "version": "5.1.14",
+  "identifier": "net.appshub.cliptoall",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/ClipToAll-all.ico"
+    ]
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "ClipToAll",
+        "width": 400,
+        "height": 300,
+        "visible": false,
+        "decorations": true,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'none'",
+      "assetProtocol": {
+        "scope": ["$TEMP/**"]
+      }
+    }
+  }
+}

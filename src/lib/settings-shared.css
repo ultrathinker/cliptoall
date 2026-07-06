@@ -1,0 +1,329 @@
+  .settings-page {
+    padding: 16px 18px;
+    box-sizing: border-box;
+    background: var(--bg-base);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* GroupBox style */
+  .group-box {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 18px 16px;
+    margin: 0;
+    background: var(--bg-surface);
+    flex-shrink: 0;
+  }
+
+  .group-box legend {
+    color: var(--accent);
+    font-size: 9.5pt;
+    font-weight: 600;
+    padding: 0 8px;
+  }
+
+  .guide-link {
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: 9.5pt;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    padding: 2px 6px;
+    transition: opacity 0.15s;
+  }
+
+  .guide-link:hover {
+    opacity: 0.75;
+  }
+
+  .dropdown-select {
+    width: 100%;
+    background: var(--bg-input);
+    color: var(--text-main);
+    border: 1px solid var(--border);
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 9.5pt;
+  }
+
+  .dropdown-select:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  @keyframes pulse-border {
+    0%, 100% { border-color: var(--accent); }
+    50% { border-color: var(--accent-hover); }
+  }
+
+  .field-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .field-input {
+    background: var(--bg-input);
+    color: var(--text-main);
+    border: 1px solid var(--border);
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-size: 9.5pt;
+    height: 28px;
+    box-sizing: border-box;
+  }
+
+  .field-input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  .field-input.full {
+    flex: 1;
+  }
+
+  .field-input.half {
+    width: 220px;
+  }
+
+  .field-input.flex1 {
+    flex: 1;
+  }
+
+  /* Buttons */
+  .btn-accent {
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 5px 20px;
+    border-radius: 4px;
+    font-family: 'Segoe UI Semibold', 'Segoe UI', sans-serif;
+    font-size: 9pt;
+    cursor: pointer;
+    transition: background 0.15s;
+    height: 30px;
+    white-space: nowrap;
+  }
+
+  .btn-accent:hover {
+    background: var(--accent-hover);
+  }
+
+  .btn-default {
+    background: var(--bg-input);
+    color: var(--text-main);
+    border: 1px solid var(--border);
+    padding: 5px 20px;
+    border-radius: 4px;
+    font-size: 9pt;
+    cursor: pointer;
+    transition: border-color 0.15s;
+    height: 30px;
+  }
+
+  .btn-default:hover {
+    border-color: var(--accent);
+  }
+
+  .btn-small {
+    background: var(--bg-input);
+    color: var(--text-main);
+    border: 1px solid var(--border);
+    padding: 3px 12px;
+    border-radius: 4px;
+    font-size: 9pt;
+    cursor: pointer;
+    height: 28px;
+  }
+
+  .btn-small:hover {
+    border-color: var(--accent);
+  }
+
+  .bottom-buttons {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 4px;
+    flex-shrink: 0;
+  }
+
+  .bottom-buttons-right {
+    display: flex;
+    gap: 10px;
+  }
+
+  .btn-save {
+    min-width: 100px;
+  }
+
+  /* Help ? button */
+  .help-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    font-size: 9px;
+    line-height: 1;
+    padding: 0;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: color 0.15s, border-color 0.15s;
+  }
+
+  .help-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .help-btn-legend {
+    vertical-align: middle;
+    margin-left: 2px;
+  }
+
+  /* Help popup overlay */
+  .help-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+
+  .help-popup {
+    width: 90%;
+    max-height: 90%;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  }
+
+  .help-title {
+    font-size: 11pt;
+    font-weight: 600;
+    color: var(--accent);
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .help-body {
+    padding: 16px 20px;
+    font-size: 9.5pt;
+    color: var(--text-main);
+    line-height: 1.6;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .help-body p {
+    margin: 0 0 8px;
+  }
+
+  .help-body p:last-child {
+    margin-bottom: 0;
+  }
+
+  .help-heading {
+    font-weight: 600;
+    color: var(--accent);
+    font-size: 9.5pt;
+    margin-top: 8px;
+  }
+
+  .help-bullet {
+    padding-left: 8px;
+    margin-bottom: 4px !important;
+  }
+
+  .help-footer {
+    display: flex;
+    justify-content: flex-end;
+    padding: 12px 20px;
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  /* ── Tab bar ──────────────────────────────────────────────── */
+  .tab-bar {
+    display: flex;
+    gap: 2px;
+    border-bottom: 2px solid var(--border);
+  }
+
+  .tab-btn {
+    background: none;
+    border: none;
+    padding: 7px 20px;
+    font-size: 9.5pt;
+    font-family: 'Segoe UI Semibold', 'Segoe UI', sans-serif;
+    color: var(--text-dim);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    transition: color 0.15s, border-color 0.15s;
+  }
+
+  .tab-btn:hover {
+    color: var(--text-main);
+  }
+
+  .tab-btn.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
+  /* ── Tab content scroll area ─────────────────────────────── */
+  .tab-content {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    padding-right: 6px;
+  }
+
+  /* ── Guide popup tabs ─────────────────────────────────────── */
+  .guide-tab-bar {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .guide-tab {
+    background: none;
+    border: none;
+    padding: 12px 20px;
+    font-size: 10pt;
+    font-family: 'Segoe UI Semibold', 'Segoe UI', sans-serif;
+    color: var(--text-dim);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color 0.15s, border-color 0.15s;
+  }
+
+  .guide-tab:hover {
+    color: var(--text-main);
+  }
+
+  .guide-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }

@@ -1,0 +1,542 @@
+  /* ── Plugins tab ──────────────────────────────────────────── */
+  .plugins-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .plugins-status {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 9.5pt;
+    padding: 20px 0;
+  }
+
+  .plugins-status p {
+    margin: 4px 0;
+  }
+
+  .plugins-hint {
+    font-size: 8.5pt;
+    color: var(--text-dim);
+    margin: 0;
+    margin-left: auto;
+  }
+
+  .plugins-hint code {
+    background: var(--bg-input);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 8.5pt;
+  }
+
+  .plugin-card {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    background: var(--bg-surface);
+  }
+
+  .plugin-card.invalid {
+    opacity: 0.6;
+  }
+
+  .plugin-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .plugin-info {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .plugin-exe {
+    font-size: 8.5pt;
+    color: var(--text-dim);
+    font-family: monospace;
+  }
+
+  .plugin-name {
+    font-size: 9.5pt;
+    font-weight: 600;
+    color: var(--text-main);
+  }
+
+  .plugin-ver {
+    font-weight: 400;
+    color: var(--text-dim);
+    font-size: 8.5pt;
+  }
+
+  .plugin-header-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .plugin-desc-row {
+    font-size: 8.5pt;
+    color: var(--text-dim);
+    margin-top: 4px;
+    line-height: 1.5;
+  }
+
+  .plugin-desc-preview {
+    font-size: 8.5pt;
+    color: var(--text-dim);
+  }
+
+  .plugin-desc-preview.dim {
+    font-style: italic;
+  }
+
+  .plugin-link {
+    background: none;
+    border: none;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 8.5pt;
+    padding: 0;
+    text-decoration: underline;
+  }
+  .plugin-link:hover {
+    opacity: 0.8;
+  }
+
+  .settings-warn {
+    color: #e74c3c;
+    font-weight: bold;
+    margin-left: 3px;
+  }
+
+  .settings-popup {
+    max-width: 480px;
+  }
+
+  .settings-desc {
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+
+  .settings-format-label {
+    font-size: 8.5pt;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+  }
+
+  .settings-format {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 8.5pt;
+    color: var(--text-base);
+    margin-bottom: 8px;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  .settings-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-family: monospace;
+    font-size: 9pt;
+    color: var(--text-base);
+    resize: vertical;
+  }
+
+  .settings-masked {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    min-height: 34px;
+  }
+
+  .settings-masked-dots {
+    font-size: 10pt;
+    color: var(--text-dim);
+    letter-spacing: 2px;
+    flex: 1;
+    user-select: none;
+  }
+
+  .settings-reveal-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 8.5pt;
+    color: var(--accent);
+    cursor: pointer;
+    font-family: inherit;
+    white-space: nowrap;
+  }
+
+  .settings-reveal-btn:hover {
+    text-decoration: underline;
+  }
+
+  .settings-error {
+    color: #e74c3c;
+    font-size: 8.5pt;
+    display: block;
+    margin-top: 4px;
+  }
+
+  .plugin-error {
+    font-size: 8.5pt;
+    color: #e74c3c;
+    margin-top: 4px;
+  }
+
+  .toggle-btn {
+    background: var(--bg-input);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    padding: 3px 14px;
+    border-radius: 4px;
+    font-size: 8.5pt;
+    font-weight: 600;
+    cursor: pointer;
+    min-width: 44px;
+    transition: all 0.15s;
+  }
+
+  .toggle-btn.on {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+  }
+
+  .toggle-btn:hover {
+    border-color: var(--accent);
+  }
+
+  .plugin-functions {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .func-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 3px 0;
+  }
+
+  .func-label {
+    font-size: 9pt;
+    color: var(--text-main);
+  }
+
+  .key-btn {
+    background: var(--bg-input);
+    color: var(--text-main);
+    border: 1px solid var(--border);
+    padding: 2px 12px;
+    border-radius: 4px;
+    font-size: 9pt;
+    font-family: monospace;
+    min-width: 40px;
+    text-align: center;
+    cursor: pointer;
+    height: 26px;
+    transition: border-color 0.15s;
+  }
+
+  .key-btn:hover {
+    border-color: var(--accent);
+  }
+
+  .key-btn.listening {
+    border-color: var(--accent);
+    animation: pulse-border 1s ease-in-out infinite;
+    color: var(--accent);
+  }
+
+  .key-btn.setup {
+    border-color: #f39c12;
+    color: #f39c12;
+    font-size: 7.5pt;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+
+  .key-btn.setup:hover {
+    border-color: #e67e22;
+    color: #e67e22;
+  }
+
+  /* ── Function list column headers ─────────────────────────── */
+  .func-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 0 3px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 2px;
+  }
+
+  .func-header-label {
+    font-size: 8pt;
+    color: var(--text-dim);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  /* ── Plugin type badges ──────────────────────────────────── */
+  .plugin-badge {
+    display: inline-block;
+    font-size: 7pt;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+    letter-spacing: 0.3px;
+    margin-right: 4px;
+    vertical-align: middle;
+    line-height: 1.4;
+  }
+
+  .badge-exe {
+    background: var(--border);
+    color: var(--text-main);
+  }
+
+  .badge-py {
+    background: #306998;
+    color: #ffd43b;
+  }
+
+  .badge-cs {
+    background: #68217a;
+    color: #fff;
+  }
+
+  .badge-ps {
+    background: #012456;
+    color: #55b9f3;
+  }
+
+  .plugin-mode {
+    font-size: 7.5pt;
+    color: var(--text-dim);
+    margin-left: 6px;
+    font-style: italic;
+  }
+
+  .runtime-warn {
+    font-size: 8pt;
+    color: #e74c3c;
+    display: block;
+    margin-top: 1px;
+  }
+
+  .runtime-ok {
+    font-size: 8pt;
+    color: #4caf50;
+    margin-left: 8px;
+  }
+
+  .plugin-link-danger {
+    color: #e74c3c !important;
+  }
+
+  .plugin-link-danger:hover {
+    opacity: 0.7 !important;
+  }
+
+  .plugin-link:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* ── Console output panel ────────────────────────────────── */
+  .console-panel {
+    margin-top: 6px;
+    border-top: 1px solid var(--border);
+    padding-top: 6px;
+  }
+
+  .console-header {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 4px;
+  }
+
+  .console-output {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-family: 'Cascadia Code', 'Consolas', monospace;
+    font-size: 8.5pt;
+    color: var(--text-main);
+    max-height: 150px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 0;
+  }
+
+  /* ── Plugins toolbar (top) ───────────────────────────────── */
+  .plugins-toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .plugins-toolbar-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .plugins-sort-select {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px 6px;
+    font-size: 8.5pt;
+    color: var(--text-main);
+  }
+
+  .plugins-search {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 8.5pt;
+    color: var(--text-main);
+    flex: 1;
+    min-width: 100px;
+  }
+
+  .plugins-search::placeholder {
+    color: var(--text-dim);
+  }
+
+  .btn-add-script {
+    white-space: nowrap;
+    font-weight: 600;
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .btn-add-script:hover {
+    background: var(--accent);
+    color: white;
+  }
+
+  .plugin-functions.disabled {
+    opacity: 0.5;
+  }
+
+  .key-btn.disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+
+  /* ── Script editor modal ─────────────────────────────────── */
+  .script-editor-popup {
+    max-width: 640px;
+  }
+
+  .script-editor-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .script-field-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .script-field-label {
+    width: 70px;
+    text-align: right;
+    font-size: 9pt;
+    color: var(--text-main);
+    flex-shrink: 0;
+  }
+
+  .script-lang-row {
+    display: flex;
+    align-items: center;
+    flex: 1;
+  }
+
+  .script-lang-select {
+    width: 160px;
+  }
+
+  .script-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-family: 'Cascadia Code', 'Consolas', monospace;
+    font-size: 9pt;
+    color: var(--text-main);
+    resize: vertical;
+    line-height: 1.5;
+    tab-size: 4;
+  }
+
+  .script-textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  /* ── AI Instructions ─────────────────────────────────────── */
+
+  .ai-instructions-link {
+    background: none;
+    border: none;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 8.5pt;
+    padding: 0;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    margin-left: 10px;
+    white-space: nowrap;
+    transition: opacity 0.15s;
+  }
+
+  .ai-instructions-link:hover {
+    opacity: 0.75;
+  }
+
+  .ai-instructions-popup {
+    max-width: 700px;
+    width: 92%;
+  }
+
+  .ai-instructions-pre {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 9pt;
+    color: var(--text-main);
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+    line-height: 1.6;
+  }

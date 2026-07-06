@@ -1,0 +1,33 @@
+{
+  "identifier": "main-window",
+  "description": "Capabilities for the main (Settings/About) window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    "core:window:allow-close",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-set-decorations",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-center",
+    "core:window:allow-set-resizable",
+    "core:window:allow-set-min-size",
+    "core:window:allow-scale-factor",
+    "core:window:allow-minimize",
+    "core:window:allow-unminimize",
+    "core:window:allow-is-minimized",
+    "core:event:default",
+    "core:event:allow-emit",
+    "core:event:allow-listen",
+    "clipboard-manager:allow-write-text",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://**" }, { "url": "http://**" }]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+# EditorConfig is awesome: https://editorconfig.org
+# Top-most EditorConfig file
+root = true
+
+# Defaults for all files
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# Web/config formats use 2-space indentation
+[*.{json,json5,jsonc,yml,yaml,js,jsx,ts,tsx,mjs,cjs,svelte,css,scss,html}]
+indent_size = 2
+
+# Rust uses 4-space indentation (spaces, not tabs)
+[*.rs]
+indent_style = space
+indent_size = 4
+
+# Makefiles require tabs
+[Makefile]
+indent_style = tab
+
+# Markdown: preserve trailing whitespace (used for hard line breaks)
+[*.{md,markdown}]
+trim_trailing_whitespace = false

@@ -1,0 +1,29 @@
+{
+  "identifier": "results-window",
+  "description": "Capabilities for dynamically-created Results/Editor windows",
+  "windows": ["results-*"],
+  "permissions": [
+    "core:default",
+    "core:window:default",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-close",
+    "core:window:allow-set-size",
+    "core:window:allow-set-min-size",
+    "core:window:allow-center",
+    "core:window:allow-scale-factor",
+    "core:window:allow-minimize",
+    "core:window:allow-unminimize",
+    "core:window:allow-maximize",
+    "core:window:allow-unmaximize",
+    "core:window:allow-is-minimized",
+    "core:event:default",
+    "core:event:allow-emit",
+    "core:event:allow-listen",
+    "clipboard-manager:allow-write-text",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://**" }, { "url": "http://**" }]
+    }
+  ]
+}
