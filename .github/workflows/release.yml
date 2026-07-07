@@ -49,11 +49,19 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'ClipToAll ${{ github.ref_name }}'
           releaseBody: |
-            ## Install
-            Download the `.exe` installer below and run it (Windows 10/11).
+            ## Download (Windows 10/11)
 
-            > The installer is not code-signed yet, so Windows SmartScreen may warn
-            > you — click **More info -> Run anyway**.
+            Pick one:
+
+            - **`*-setup.exe`** — installer. Adds a Start Menu shortcut and an
+              uninstall entry, and installs the WebView2 runtime if it's missing.
+            - **`ClipToAll-*-portable.exe`** — single portable executable. No
+              install: just run it from anywhere (it self-registers autostart if
+              you enable it in Settings). Needs the WebView2 runtime, which is
+              preinstalled on Windows 11 and most Windows 10.
+
+            > Neither is code-signed yet, so Windows SmartScreen may warn you —
+            > click **More info -> Run anyway**.
 
             ## Highlights
             - Global-hotkey region capture (Alt+X), copy-image or copy-link mode
@@ -68,3 +76,15 @@ jobs:
           # manual review before publishing.
           releaseDraft: false
           prerelease: false
+
+      # tauri-action only attaches the installer. Also publish the standalone
+      # exe so users can run ClipToAll portably (no install). It's the same
+      # binary the installer wraps — frontend embedded, no external files.
+      - name: Attach portable executable
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $portable = "ClipToAll-${{ github.ref_name }}-portable.exe"
+          Copy-Item "src-tauri/target/release/cliptoall-tauri2.exe" $portable
+          gh release upload "${{ github.ref_name }}" $portable --clobber

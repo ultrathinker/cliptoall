@@ -10,7 +10,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
     "icon": [
       "icons/ClipToAll-all.ico"
     ]
