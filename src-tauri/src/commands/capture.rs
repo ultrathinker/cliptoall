@@ -82,12 +82,14 @@ fn output_filename_ext(ext: &str) -> String {
     let prefix = crate::commands::settings::load_settings_sync().image_prefix;
     let prefix = if prefix.trim().is_empty() { "cta_".to_string() } else { prefix };
     let t = chrono::Local::now();
-    let uuid = uuid::Uuid::new_v4().to_string();
+    // 12 hex chars (48 bits) of randomness — S3/GDrive keys must not be guessable
+    // from the timestamp alone.
+    let uuid = uuid::Uuid::new_v4().simple().to_string();
     // Zero-padded so names sort lexicographically and match the frontend's
-    // formatDate() (utils.ts): cta_2026_07_05_09_03_01_abc.jpg.
+    // formatDate() (utils.ts): cta_2026_07_05_09_03_01_<12 hex chars>.jpg.
     format!(
         "{}{:04}_{:02}_{:02}_{:02}_{:02}_{:02}_{}.{}",
-        prefix, t.year(), t.month(), t.day(), t.hour(), t.minute(), t.second(), &uuid[..3], ext
+        prefix, t.year(), t.month(), t.day(), t.hour(), t.minute(), t.second(), &uuid[..12], ext
     )
 }
 

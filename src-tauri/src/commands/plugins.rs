@@ -1,4 +1,4 @@
-use crate::plugins::{DiscoveredPlugin, PluginConfig, PluginManagerState, ActivePlugin, PluginManager, PluginType};
+use crate::plugins::{DiscoveredPlugin, PluginConfig, PluginManagerState, PluginManager, PluginType};
 use tauri::State;
 
 /// Scan the plugins/ folder for exe, .py, .cs, and .ps1 files.
@@ -34,34 +34,6 @@ pub fn discover_plugins() -> Vec<DiscoveredPlugin> {
     });
 
     plugins
-}
-
-/// Get currently running plugins with their key bindings.
-#[tauri::command]
-pub fn get_active_plugins(state: State<PluginManagerState>) -> Vec<ActivePlugin> {
-    let mgr = state.0.lock();
-    mgr.get_active_plugins()
-}
-
-/// Start a plugin (enable it).
-#[tauri::command]
-pub fn start_plugin(
-    state: State<PluginManagerState>,
-    path: String,
-    key_bindings: std::collections::HashMap<String, String>,
-) -> Result<(), String> {
-    ensure_in_plugins_dir(std::path::Path::new(&path))?;
-    let mut mgr = state.0.lock();
-    mgr.start_plugin(&path, &key_bindings)?;
-    Ok(())
-}
-
-/// Stop a plugin (disable it).
-#[tauri::command]
-pub fn stop_plugin(state: State<PluginManagerState>, path: String) -> Result<(), String> {
-    let mut mgr = state.0.lock();
-    mgr.stop_plugin(&path);
-    Ok(())
 }
 
 /// Save plugin configurations and restart plugins accordingly.
@@ -112,8 +84,19 @@ pub fn apply_plugin_config(
 
 /// Load saved plugin configs from the plugin config file.
 #[tauri::command]
-pub fn load_plugin_configs() -> Vec<PluginConfig> {
-    load_plugin_configs_sync()
+pub fn load_plugin_configs(window: tauri::Window) -> Vec<PluginConfig> {
+    let mut configs = load_plugin_configs_sync();
+    // Only the Settings UI (the "main" window) may receive decrypted plugin
+    // settings — they can contain secrets such as the encryption plugin's
+    // password. Every other window (Results/Editor) never needs the plaintext
+    // settings, so blank them to keep a compromised WebView from reading
+    // secrets over the IPC boundary (mirrors load_settings in settings.rs).
+    if window.label() != "main" {
+        for cfg in &mut configs {
+            cfg.settings = String::new();
+        }
+    }
+    configs
 }
 
 /// Open a script in a PowerShell terminal for interactive debugging.
@@ -130,7 +113,7 @@ pub fn run_script_in_terminal(path: String) -> Result<(), String> {
         _ => return Err(format!("Unsupported extension: {}", ext)),
     };
 
-    std::process::Command::new("powershell")
+    std::process::Command::new(crate::plugins::powershell_path())
         .args(["-NoExit", "-Command", &script_cmd])
         .spawn()
         .map_err(|e| format!("Failed to open PowerShell: {}", e))?;
@@ -189,7 +172,7 @@ pub fn run_script(path: String) -> Result<String, String> {
             c
         }
         PluginType::PowerShell => {
-            let mut c = std::process::Command::new("powershell");
+            let mut c = std::process::Command::new(crate::plugins::powershell_path());
             c.args(["-NoProfile", "-File"]).arg(&path);
             c
         }

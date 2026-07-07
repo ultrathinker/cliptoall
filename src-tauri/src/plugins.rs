@@ -121,15 +121,6 @@ pub struct PluginConfig {
     pub settings: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ActivePlugin {
-    pub path: String,
-    pub name: String,
-    pub functions: Vec<PluginFunction>,
-    pub key_bindings: HashMap<String, String>,
-}
-
 // ── Plugin process handle ───────────────────────────────────────
 
 struct PluginProcess {
@@ -388,6 +379,10 @@ impl PluginManager {
 
     /// Build the command to run a plugin/script.
     fn build_command(path: &str, plugin_type: PluginType) -> Command {
+        // PowerShell: resolve the built-in system binary so a rogue
+        // powershell.exe earlier on PATH can't shadow it. python/dotnet are
+        // deliberately left on PATH (no single canonical install path; same-user
+        // trust boundary).
         match plugin_type {
             PluginType::Python => {
                 let mut cmd = Command::new("python");
@@ -400,7 +395,7 @@ impl PluginManager {
                 cmd
             }
             PluginType::PowerShell => {
-                let mut cmd = Command::new("powershell");
+                let mut cmd = Command::new(powershell_path());
                 cmd.args(["-NoProfile", "-File"]).arg(path);
                 cmd
             }
@@ -668,24 +663,6 @@ impl PluginManager {
             action: None,
         })
     }
-
-    /// Get active plugins info for the UI.
-    pub fn get_active_plugins(&self) -> Vec<ActivePlugin> {
-        self.hellos.iter().map(|(path, hello)| {
-            let mut bindings = HashMap::new();
-            for (key, (p, fid)) in &self.key_map {
-                if p == path {
-                    bindings.insert(fid.clone(), key.clone());
-                }
-            }
-            ActivePlugin {
-                path: path.clone(),
-                name: hello.name.clone(),
-                functions: hello.functions.clone(),
-                key_bindings: bindings,
-            }
-        }).collect()
-    }
 }
 
 #[cfg(windows)]
@@ -904,6 +881,19 @@ pub fn discover_script_files() -> Vec<DiscoveredPlugin> {
     result
 }
 
+/// Absolute path to built-in Windows PowerShell, so a rogue powershell.exe
+/// earlier on PATH can't be picked up. Falls back to bare name if missing.
+pub(crate) fn powershell_path() -> std::path::PathBuf {
+    if let Ok(root) = std::env::var("SystemRoot") {
+        let p = std::path::PathBuf::from(root)
+            .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+        if p.exists() {
+            return p;
+        }
+    }
+    std::path::PathBuf::from("powershell")
+}
+
 /// Check if a runtime (python/dotnet) is available in PATH.
 pub fn check_runtime(language: &str) -> Result<String, String> {
     let cmd_name = match language {
@@ -913,7 +903,14 @@ pub fn check_runtime(language: &str) -> Result<String, String> {
         _ => return Err(format!("Unknown language: {}", language)),
     };
 
-    let mut cmd = Command::new(cmd_name);
+    // PowerShell: resolve the built-in system binary so a rogue powershell.exe
+    // earlier on PATH can't shadow it. python/dotnet deliberately stay on PATH
+    // (no single canonical install path; same-user trust boundary).
+    let mut cmd = if language == "powershell" {
+        Command::new(powershell_path())
+    } else {
+        Command::new(cmd_name)
+    };
     if language == "powershell" {
         cmd.args(["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"]);
     } else {

@@ -70,7 +70,14 @@ pub async fn upload_to_s3(
     }
 
     let encoded_key = encode_s3_key_for_url(&key);
-    let url = format!("https://{}.s3.{}.amazonaws.com/{}", bucket, region, encoded_key);
+    // Buckets with a dot in the name (e.g. "my.bucket") can't use the virtual-hosted
+    // style (https://my.bucket.s3.region.amazonaws.com) because the resulting
+    // certificate won't match — fall back to path-style addressing for those.
+    let url = if bucket.contains('.') {
+        format!("https://s3.{}.amazonaws.com/{}/{}", region, bucket, encoded_key)
+    } else {
+        format!("https://{}.s3.{}.amazonaws.com/{}", bucket, region, encoded_key)
+    };
     Ok(url)
 }
 

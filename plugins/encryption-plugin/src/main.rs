@@ -1,7 +1,7 @@
-/// ClipToAll Encryption Plugin
-///
-/// Provides AES-256-CBC encryption/decryption for clipboard text.
-/// Follows the ClipToAll plugin protocol (stdin/stdout JSON).
+//! ClipToAll Encryption Plugin
+//!
+//! Provides AES-256-CBC encryption/decryption for clipboard text.
+//! Follows the ClipToAll plugin protocol (stdin/stdout JSON).
 
 mod crypto;
 
@@ -20,16 +20,17 @@ While the capture overlay is visible, press the assigned shortcut key to encrypt
 or decrypt the text currently in your clipboard. Shortcut keys are shown \
 and configurable in Settings > Plugins.\n\n\
 Two schemes are available (set \"scheme\" in Settings):\n\
-• \"legacy\" (default) — AES-256-CBC, key=sha256(Password), IV=sha256('ClipToAll') \
-[first 16 bytes]. Compatible with the .NET version of ClipToAll and with anything \
-already encrypted. Try online: https://the-x.cn/en-us/cryptography/Aes.aspx\n\
-• \"strong\" (v2) — per-message random salt + PBKDF2-HMAC-SHA256 (600k rounds) + \
-AES-256-GCM (authenticated). Much stronger, but v2 output is NOT decryptable by \
-the .NET version. Decryption auto-detects both schemes, so old values keep working.";
-const SETTINGS_DESCRIPTION: &str = "Requires an encryption password. Optionally set \
-\"scheme\" to \"legacy\" (default, .NET-compatible) or \"strong\" (v2: PBKDF2 + \
-AES-256-GCM; stronger, but breaks .NET interop). Decryption auto-detects the scheme.";
-const SETTINGS_FORMAT: &str = r#"{"password": "your-password-here", "scheme": "legacy"}"#;
+• \"strong\" (default) — per-message random salt + PBKDF2-HMAC-SHA256 (600k rounds) + \
+AES-256-GCM (authenticated). Recommended.\n\
+• \"legacy\" — AES-256-CBC, key=sha256(Password), IV=sha256('ClipToAll') [first 16 \
+bytes]. Opt-in interop mode: its output is decryptable by the .NET/old version of \
+ClipToAll. Try online: https://the-x.cn/en-us/cryptography/Aes.aspx\n\n\
+Decryption auto-detects both schemes, so anything encrypted earlier keeps working.";
+const SETTINGS_DESCRIPTION: &str = "Requires an encryption password. Optional \
+\"scheme\": \"strong\" (default — PBKDF2 + AES-256-GCM, authenticated) or \
+\"legacy\" (AES-256-CBC, only for interop with the .NET/old version of ClipToAll). \
+Decryption auto-detects the scheme, so previously encrypted values always work.";
+const SETTINGS_FORMAT: &str = r#"{"password": "your-password-here", "scheme": "strong"}"#;
 
 /// Return the list of functions this plugin provides.
 fn functions() -> Vec<Function> {
@@ -72,7 +73,7 @@ fn handle_call(function: &str, context: &CallContext) -> ResultMsg {
     }
 
     let (password, scheme) = if context.settings.is_empty() {
-        (String::new(), Scheme::Legacy)
+        (String::new(), Scheme::Strong)
     } else {
         match serde_json::from_str::<Settings>(&context.settings) {
             Ok(s) => (s.password, Scheme::from_setting(&s.scheme)),

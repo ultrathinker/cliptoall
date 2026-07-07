@@ -241,7 +241,22 @@ pub async fn get_valid_token() -> Result<String, String> {
             .form(&params)
             .send()
             .await
-            .map_err(|e| format!("Token refresh failed: {}", e))?
+            .map_err(|e| format!("Token refresh failed: {}", e))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            if status.is_client_error() {
+                *GDRIVE_TOKEN.lock() = None;
+                delete_token_from_disk();
+                return Err("Google Drive access has been revoked or expired. \
+                    Please reconnect in Settings > Storage (Connect to Google Drive)."
+                    .to_string());
+            }
+            return Err(format!("Token refresh failed ({}): {}", status, body));
+        }
+
+        let resp = resp
             .json::<GoogleTokenResponse>()
             .await
             .map_err(|e| format!("Failed to parse refresh response: {}", e))?;
@@ -276,7 +291,7 @@ pub async fn gdrive_authorize(
         .map_err(|e| format!("Failed to get port: {}", e))?
         .port();
 
-    let redirect_uri = format!("http://localhost:{}", port);
+    let redirect_uri = format!("http://127.0.0.1:{}", port);
 
     // PKCE + CSRF state (RFC 8252 §8.9). code_verifier = 32 random bytes
     // (2×UUID) base64url; code_challenge = base64url(SHA256(verifier)). `state`
@@ -362,25 +377,6 @@ pub async fn gdrive_authorize(
     });
 
     Ok(email)
-}
-
-#[tauri::command]
-pub async fn gdrive_upload(
-    image_path: String,
-    folder_name: String,
-    output_scale: f32,
-) -> Result<String, String> {
-    // Reject any path outside the app's temp screenshot dir (BUGS#3).
-    super::capture::ensure_temp_screenshot_path(&image_path)?;
-    // Guarantee JPEG bytes (+ output downscale if enabled) even if invoked
-    // directly with a full-res PNG working copy.
-    let image_path = super::capture::ensure_jpeg_for_upload(&image_path, output_scale)?;
-    let access_token = get_valid_token().await?;
-    let client = http_client();
-
-    // Create/resolve folder_name/YYYY/MM/DD (uncached direct path).
-    let day_id = find_or_create_date_folder(&client, &access_token, &folder_name).await?;
-    upload_image_to_folder(&client, &access_token, &image_path, &day_id).await
 }
 
 /// Direct upload that reuses the pool's folder cache to resolve today's folder
@@ -471,23 +467,6 @@ async fn upload_image_to_folder(
 
     let link = format!("https://drive.google.com/uc?id={}&export=view", file_id);
     Ok(link)
-}
-
-/// Resolve (creating as needed) the folder_name/YYYY/MM/DD hierarchy for today,
-/// returning the day folder id. Shared by the direct upload path.
-pub async fn find_or_create_date_folder(
-    client: &reqwest::Client,
-    token: &str,
-    folder_name: &str,
-) -> Result<String, String> {
-    let now = chrono::Local::now();
-    let year = now.format("%Y").to_string();
-    let month = now.format("%m").to_string();
-    let day = now.format("%d").to_string();
-    let root_id = find_or_create_folder(client, token, folder_name, None).await?;
-    let year_id = find_or_create_folder(client, token, &year, Some(&root_id)).await?;
-    let month_id = find_or_create_folder(client, token, &month, Some(&year_id)).await?;
-    find_or_create_folder(client, token, &day, Some(&month_id)).await
 }
 
 pub async fn find_or_create_folder(

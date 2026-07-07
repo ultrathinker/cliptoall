@@ -2,22 +2,19 @@
 //!
 //! Two on-the-wire schemes coexist:
 //!
-//! * **Legacy** (default, unmarked): key = SHA-256(password), fixed IV =
-//!   SHA-256("ClipToAll")[..16], AES-256-CBC + PKCS7, base64. Byte-for-byte
-//!   compatible with the old .NET ClipToAll and with every value the user has
-//!   already encrypted. Intentionally left unchanged.
-//!
-//! * **Strong v2** (opt-in, marker-prefixed `CTA2:`): per-message random salt,
+//! * **Strong v2** (DEFAULT, marker-prefixed `CTA2:`): per-message random salt,
 //!   PBKDF2-HMAC-SHA256 key derivation, random 96-bit nonce, AES-256-GCM
 //!   (authenticated). Envelope: `CTA2:` + base64(salt(16) || nonce(12) || ct+tag).
 //!
-//! CAVEAT: v2 ciphertext is NOT decryptable by the old .NET ClipToAll — only
-//! legacy is. Choosing "Strong" deliberately breaks .NET interop. Decryption
-//! auto-detects the scheme from the marker, so legacy values keep working.
+//! * **Legacy** (OPT-IN, unmarked): key = SHA-256(password), fixed IV =
+//!   SHA-256("ClipToAll")[..16], AES-256-CBC + PKCS7, base64. An interop mode
+//!   for the old .NET ClipToAll and for previously-encrypted values; its output
+//!   is decryptable by the .NET version. Byte-for-byte compatible with anything
+//!   already encrypted that way.
 //!
-//! NOTE: this module is intentionally a behavioural twin of
-//! `src-tauri/src/commands/encryption.rs` (a separate crate). Ciphertext
-//! produced by one must decrypt in the other; keep them in sync.
+//! Decryption auto-detects the scheme from the `CTA2:` marker, so legacy values
+//! keep working forever regardless of which scheme is selected for NEW
+//! ciphertext.
 
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use aes_gcm::aead::{Aead, KeyInit};
@@ -43,19 +40,21 @@ const KEY_LEN: usize = 32;
 /// Which scheme to use when encrypting. Decryption always auto-detects.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Scheme {
-    /// Legacy AES-256-CBC (default; compatible with the .NET version).
+    /// Legacy AES-256-CBC (opt-in; interop with the .NET version).
     Legacy,
-    /// Strong v2: PBKDF2 + AES-256-GCM (breaks .NET interop).
+    /// Strong v2: PBKDF2 + AES-256-GCM (default; breaks .NET interop).
     Strong,
 }
 
 impl Scheme {
-    /// Parse the `scheme` settings field. Anything other than an explicit
-    /// "strong"/"v2" (case-insensitive) falls back to Legacy — the safe default.
+    /// Parse the `scheme` settings field. Strong (v2) is the default; only an
+    /// explicit "legacy"/"cbc"/"v1" (case-insensitive) selects the legacy
+    /// .NET-compatible scheme. Decryption always auto-detects, so this only
+    /// affects what NEW ciphertext looks like.
     pub fn from_setting(value: &str) -> Self {
         match value.trim().to_ascii_lowercase().as_str() {
-            "strong" | "v2" => Scheme::Strong,
-            _ => Scheme::Legacy,
+            "legacy" | "cbc" | "v1" => Scheme::Legacy,
+            _ => Scheme::Strong,
         }
     }
 }
@@ -260,11 +259,20 @@ mod tests {
     }
 
     #[test]
-    fn scheme_parsing() {
+    fn scheme_parsing_default_is_strong() {
         assert_eq!(Scheme::from_setting("strong"), Scheme::Strong);
         assert_eq!(Scheme::from_setting("V2"), Scheme::Strong);
+        assert_eq!(Scheme::from_setting(""), Scheme::Strong);
+        assert_eq!(Scheme::from_setting("garbage"), Scheme::Strong);
         assert_eq!(Scheme::from_setting("legacy"), Scheme::Legacy);
-        assert_eq!(Scheme::from_setting(""), Scheme::Legacy);
-        assert_eq!(Scheme::from_setting("garbage"), Scheme::Legacy);
+        assert_eq!(Scheme::from_setting("Legacy"), Scheme::Legacy);
+        assert_eq!(Scheme::from_setting("cbc"), Scheme::Legacy);
+        assert_eq!(Scheme::from_setting("v1"), Scheme::Legacy);
+    }
+
+    #[test]
+    fn default_setting_encrypts_strong() {
+        let enc = encrypt_text("x", "pw", Scheme::from_setting("")).unwrap();
+        assert!(enc.starts_with(MARKER_V2));
     }
 }

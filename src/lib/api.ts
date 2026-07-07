@@ -64,13 +64,6 @@ export const gdriveAuthorize = () => invoke<string>('gdrive_authorize');
 export const gdriveHasToken = () => invoke<boolean>('gdrive_has_token');
 export const gdriveDisconnect = () => invoke<void>('gdrive_disconnect');
 
-// ── Encryption (clipboard plugin passthrough commands) ──────────
-
-export const encryptText = (text: string, password: string) =>
-  invoke<string>('encrypt_text', { text, password });
-export const decryptText = (text: string, password: string) =>
-  invoke<string>('decrypt_text', { text, password });
-
 // ── Plugins ─────────────────────────────────────────────────────
 
 export const discoverPlugins = () => invoke<DiscoveredPlugin[]>('discover_plugins');

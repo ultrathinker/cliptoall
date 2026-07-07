@@ -1,12 +1,8 @@
-import { writable } from 'svelte/store';
-import { themes, type Theme } from '../themes';
-
-export const currentTheme = writable<Theme>(themes.classic);
+import { themes } from '../themes';
 
 export function applyTheme(themeKey: string) {
   const theme = themes[themeKey] || themes.classic;
-  currentTheme.set(theme);
-  
+
   const root = document.documentElement;
   root.style.setProperty('--bg-base', theme.bgBase);
   root.style.setProperty('--bg-surface', theme.bgSurface);
