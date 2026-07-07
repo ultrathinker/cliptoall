@@ -91,6 +91,42 @@ fn validate_settings(s: &mut AppSettings) {
     if !["image", "link"].contains(&s.default_mode.as_str()) {
         s.default_mode = "image".to_string();
     }
+    // Sanitize the image prefix: it is spliced straight into the temp-screenshot
+    // filename (capture::output_filename_ext -> temp_dir().join(...)), so an
+    // unvalidated value with path separators / `..` could steer the write outside
+    // %TEMP%, and reserved chars (: * ? " < > |) would silently break saving.
+    s.image_prefix = sanitize_image_prefix(&s.image_prefix);
+    // Normalize storage locations: trim stray whitespace, and strip leading/trailing
+    // slashes from folder paths so they don't produce empty path segments. An empty
+    // Drive folder would create files at the account root, so fall back to the default.
+    s.amazon_bucket = s.amazon_bucket.trim().to_string();
+    s.amazon_region = s.amazon_region.trim().to_string();
+    s.amazon_s3folder = s.amazon_s3folder.trim().trim_matches('/').to_string();
+    s.google_drive_folder = s.google_drive_folder.trim().trim_matches('/').to_string();
+    if s.google_drive_folder.is_empty() {
+        s.google_drive_folder = "public-images".to_string();
+    }
+}
+
+/// Clean an image-filename prefix so it can only ever produce a safe, in-%TEMP%
+/// filename that the app also recognizes as its own. Drops filename-reserved and
+/// control characters, clamps the length, and enforces the same minimum length
+/// the cleanup / path-validation logic requires — anything shorter (or empty)
+/// falls back to the built-in `cta_`, so generation, validation and cleanup all
+/// agree on which files belong to ClipToAll.
+fn sanitize_image_prefix(raw: &str) -> String {
+    const ILLEGAL: &[char] = &['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| !c.is_control() && !ILLEGAL.contains(c))
+        .take(64)
+        .collect();
+    let cleaned = cleaned.trim();
+    if cleaned.chars().count() < crate::commands::capture::MIN_CUSTOM_PREFIX_LEN {
+        "cta_".to_string()
+    } else {
+        cleaned.to_string()
+    }
 }
 
 impl Default for AppSettings {
@@ -363,5 +399,55 @@ mod tests {
         assert_eq!(s.jpeg_quality, 72);
         assert_eq!(s.results_width, 1024.0);
         assert_eq!(s.results_height, 640.0);
+    }
+
+    #[test]
+    fn validate_strips_illegal_prefix_chars() {
+        let mut s = AppSettings { image_prefix: r#"..\ev:il*?"#.into(), ..Default::default() };
+        validate_settings(&mut s);
+        // All reserved/traversal characters removed; what survives ("..evil") still
+        // meets the minimum length, so it is kept — but it can no longer escape %TEMP%.
+        assert_eq!(s.image_prefix, "..evil");
+        assert!(!s.image_prefix.contains('\\'));
+        assert!(!s.image_prefix.contains(':'));
+    }
+
+    #[test]
+    fn validate_short_or_empty_prefix_falls_back_to_default() {
+        for raw in ["", "s", "//", "  "] {
+            let mut s = AppSettings { image_prefix: raw.into(), ..Default::default() };
+            validate_settings(&mut s);
+            assert_eq!(s.image_prefix, "cta_", "prefix {raw:?} should fall back");
+        }
+    }
+
+    #[test]
+    fn validate_keeps_valid_custom_prefix() {
+        let mut s = AppSettings { image_prefix: "shot_".into(), ..Default::default() };
+        validate_settings(&mut s);
+        assert_eq!(s.image_prefix, "shot_");
+    }
+
+    #[test]
+    fn validate_normalizes_folders_and_bucket() {
+        let mut s = AppSettings {
+            amazon_bucket: "  my-bucket  ".into(),
+            amazon_region: " us-east-1 ".into(),
+            amazon_s3folder: "/shots/".into(),
+            google_drive_folder: "  /pics/  ".into(),
+            ..Default::default()
+        };
+        validate_settings(&mut s);
+        assert_eq!(s.amazon_bucket, "my-bucket");
+        assert_eq!(s.amazon_region, "us-east-1");
+        assert_eq!(s.amazon_s3folder, "shots");
+        assert_eq!(s.google_drive_folder, "pics");
+    }
+
+    #[test]
+    fn validate_empty_drive_folder_falls_back_to_default() {
+        let mut s = AppSettings { google_drive_folder: "  /  ".into(), ..Default::default() };
+        validate_settings(&mut s);
+        assert_eq!(s.google_drive_folder, "public-images");
     }
 }

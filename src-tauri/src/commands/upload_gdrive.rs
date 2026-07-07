@@ -62,11 +62,16 @@ fn wait_for_oauth_code(
                     continue;
                 }
 
-                // Verify the CSRF state BEFORE using the code (RFC 8252 §8.9).
+                // Verify the CSRF state BEFORE using the code (RFC 8252 §8.9). On a
+                // mismatch, reject THIS request but keep listening until the deadline
+                // instead of tearing down the whole flow — a stray/spoofed hit (or a
+                // late browser retry) with a wrong state must not abort a legitimate
+                // redirect that may still be on its way. The real code is only ever
+                // accepted when its state matches.
                 let returned_state = extract_query_param(&request_line, "state");
                 if returned_state.as_deref() != Some(expected_state) {
                     let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\nState mismatch");
-                    return Err("Authorization rejected: state mismatch (possible CSRF).".to_string());
+                    continue;
                 }
 
                 // Parse the query properly: pick the exact `code` param (so a
@@ -279,9 +284,15 @@ pub async fn get_valid_token() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn gdrive_authorize(
+    window: tauri::Window,
     app: tauri::AppHandle,
     pool: tauri::State<'_, super::gdrive_pool::PoolRuntime>,
 ) -> Result<String, String> {
+    // Account management belongs to the Settings UI only. Tauri does not scope
+    // app-defined commands per-window, so gate this to the main window like the
+    // settings/plugin commands (a compromised Results overlay must not be able to
+    // start an OAuth flow or re-bind the connected account).
+    super::require_main_window(&window)?;
     if !gdrive_configured() {
         return Err("Google Drive is not configured in this build. Use a release build, or build with GDRIVE_CLIENT_ID and GDRIVE_CLIENT_SECRET set (see README). You can also use Amazon S3 instead.".to_string());
     }
@@ -538,8 +549,11 @@ pub fn gdrive_has_token() -> bool {
 
 #[tauri::command]
 pub fn gdrive_disconnect(
+    window: tauri::Window,
     pool: tauri::State<'_, super::gdrive_pool::PoolRuntime>,
 ) -> Result<(), String> {
+    // Only the Settings UI may disconnect the account (see gdrive_authorize).
+    super::require_main_window(&window)?;
     *GDRIVE_TOKEN.lock() = None;
     delete_token_from_disk();
     // Stop the pre-allocation daemon before clearing state, so it doesn't keep
@@ -562,13 +576,17 @@ pub struct GdriveUploadResult {
 pub async fn gdrive_upload_pooled(
     window: tauri::Window,
     image_path: String,
-    folder_name: String,
     call_id: u64,
     output_scale: f32,
     pool: tauri::State<'_, super::gdrive_pool::PoolRuntime>,
 ) -> Result<GdriveUploadResult, String> {
     // Reject any path outside the app's temp screenshot dir (BUGS#3).
     super::capture::ensure_temp_screenshot_path(&image_path)?;
+    // Read the destination folder from the backend settings — the SAME source the
+    // pre-allocation daemon uses (gdrive_pool). Taking it as an IPC parameter let a
+    // caller redirect the upload to an arbitrary Drive folder and could diverge from
+    // the folder the daemon pre-created; S3 already resolves its folder backend-side.
+    let folder_name = crate::commands::settings::load_settings_sync().google_drive_folder;
     // Working copies are full-res lossless PNG — transcode to JPEG (+ output
     // downscale if enabled) ONCE here so the placeholder PATCH / fallback upload
     // carry the final bytes and downstream paths never re-process them.

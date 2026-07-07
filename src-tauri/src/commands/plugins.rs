@@ -3,7 +3,15 @@ use tauri::State;
 
 /// Scan the plugins/ folder for exe, .py, .cs, and .ps1 files.
 #[tauri::command]
-pub fn discover_plugins() -> Vec<DiscoveredPlugin> {
+pub fn discover_plugins(window: tauri::Window) -> Vec<DiscoveredPlugin> {
+    // NOT read-only: probing exe plugins SPAWNS every .exe in the plugins/ folder
+    // (even disabled ones). Only the Settings UI legitimately enumerates plugins,
+    // so refuse other windows — a compromised Results overlay must not be able to
+    // trigger execution of those binaries. Return empty rather than erroring since
+    // the return type is a plain list.
+    if crate::commands::require_main_window(&window).is_err() {
+        return Vec::new();
+    }
     // Probe exe plugins in PARALLEL — each probe can take up to the hello
     // timeout, so a couple of uncooperative exes would otherwise serialize into
     // a long UI freeze when opening the Plugins tab (3.13).
@@ -125,25 +133,46 @@ pub fn run_script_in_terminal(window: tauri::Window, path: String) -> Result<(),
 }
 
 /// Spawn a command and wait for it with a hard timeout, killing it if it hangs.
-/// (Oneshot/dev scripts print small output, so not draining stdout during the
-/// wait is acceptable; a script emitting >64KB before exit could block.)
+/// stdout and stderr are drained on dedicated threads for the whole wait: without
+/// active readers, a script that prints more than the OS pipe buffer (~64KB)
+/// before exiting would block on the full pipe, never exit, and only be killed at
+/// the timeout with its output lost. The reader threads finish when the pipes
+/// close (on the child's exit or kill), so they never leak.
 fn output_with_timeout(mut cmd: std::process::Command, secs: u64) -> Result<std::process::Output, String> {
+    use std::io::Read;
     let mut child = cmd.spawn().map_err(|e| format!("Failed to run: {}", e))?;
+
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        pipe.map(|mut r| std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = r.read_to_end(&mut buf);
+            buf
+        }))
+    };
+    let out_reader = drain(child.stdout.take().map(|s| Box::new(s) as Box<dyn Read + Send>));
+    let err_reader = drain(child.stderr.take().map(|s| Box::new(s) as Box<dyn Read + Send>));
+
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
-    loop {
+    let status = loop {
         match child.try_wait().map_err(|e| format!("wait: {}", e))? {
-            Some(_) => break,
+            Some(status) => break status,
             None => {
                 if std::time::Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
+                    // Join the readers so their threads don't outlive this call.
+                    let _ = out_reader.map(|h| h.join());
+                    let _ = err_reader.map(|h| h.join());
                     return Err(format!("script timed out after {}s", secs));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
         }
-    }
-    child.wait_with_output().map_err(|e| format!("output: {}", e))
+    };
+
+    let stdout = out_reader.and_then(|h| h.join().ok()).unwrap_or_default();
+    let stderr = err_reader.and_then(|h| h.join().ok()).unwrap_or_default();
+    Ok(std::process::Output { status, stdout, stderr })
 }
 
 /// Run a script on demand and return its stdout.
@@ -290,7 +319,10 @@ pub fn delete_script(window: tauri::Window, path: String) -> Result<(), String> 
 
 /// Check if a runtime (python/dotnet) is available.
 #[tauri::command]
-pub fn check_runtime(language: String) -> Result<String, String> {
+pub fn check_runtime(window: tauri::Window, language: String) -> Result<String, String> {
+    // Spawns an external interpreter to probe availability; only the Settings UI
+    // (which manages plugins) needs it, so gate it like the other plugin commands.
+    crate::commands::require_main_window(&window)?;
     crate::plugins::check_runtime(&language)
 }
 

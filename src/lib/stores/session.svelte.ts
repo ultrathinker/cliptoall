@@ -100,7 +100,7 @@ export async function startUpload(opts: { copyLink?: boolean } = {}): Promise<vo
         outputScale: session.outputScale,
       });
     } else {
-      const result = await gdriveUploadPooled(path, s.googleDriveFolder, myCallId, session.outputScale);
+      const result = await gdriveUploadPooled(path, myCallId, session.outputScale);
       url = result.url;
     }
 

@@ -17,9 +17,8 @@
     "core:window:allow-maximize",
     "core:window:allow-unmaximize",
     "core:window:allow-is-minimized",
-    "core:event:default",
-    "core:event:allow-emit",
     "core:event:allow-listen",
+    "core:event:allow-unlisten",
     "clipboard-manager:allow-write-text",
     {
       "identifier": "opener:allow-open-url",

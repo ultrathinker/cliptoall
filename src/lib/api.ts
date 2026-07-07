@@ -58,8 +58,10 @@ export interface S3UploadArgs {
 }
 export const uploadToS3 = (args: S3UploadArgs) => invoke<string>('upload_to_s3', { ...args });
 
-export const gdriveUploadPooled = (imagePath: string, folderName: string, callId: number, outputScale: number) =>
-  invoke<GdriveUploadResult>('gdrive_upload_pooled', { imagePath, folderName, callId, outputScale });
+// The destination Drive folder is resolved backend-side from settings (matching
+// S3 and the pre-allocation daemon), so it is no longer passed from the frontend.
+export const gdriveUploadPooled = (imagePath: string, callId: number, outputScale: number) =>
+  invoke<GdriveUploadResult>('gdrive_upload_pooled', { imagePath, callId, outputScale });
 export const gdriveAuthorize = () => invoke<string>('gdrive_authorize');
 export const gdriveHasToken = () => invoke<boolean>('gdrive_has_token');
 export const gdriveDisconnect = () => invoke<void>('gdrive_disconnect');

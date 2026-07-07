@@ -38,23 +38,15 @@ pub(crate) fn ensure_temp_screenshot_path(path: &str) -> Result<(), String> {
         .and_then(|n| n.to_str())
         .ok_or_else(|| "Invalid image filename".to_string())?;
     let name_lower = filename.to_lowercase();
-    let configured_prefix = crate::commands::settings::load_settings_sync().image_prefix;
-    let configured_prefix = if configured_prefix.trim().is_empty() {
-        "cta_".to_string()
-    } else {
-        configured_prefix
-    };
-    let prefix_lower = configured_prefix.to_lowercase();
-    let has_expected_prefix =
-        name_lower.starts_with("cta_") || name_lower.starts_with(&prefix_lower);
-    let has_expected_ext = matches!(
-        canonical
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_lowercase()),
-        Some(ext) if ext == "png" || ext == "jpg" || ext == "jpeg"
-    );
-    if !has_expected_prefix || !has_expected_ext {
+    let prefix_lower = crate::commands::settings::load_settings_sync()
+        .image_prefix
+        .to_lowercase();
+    // Use the SAME predicate as temp cleanup so both agree on exactly which files
+    // are ours: correct prefix (built-in `cta_`, or a configured prefix that meets
+    // MIN_CUSTOM_PREFIX_LEN), the generated timestamp stem, and a png/jpg/jpeg
+    // extension. This is strictly tighter than the old prefix+ext check, which
+    // accepted a one-character prefix and let a caller read/upload any %TEMP%\<c>*.png.
+    if !is_app_screenshot_name(&name_lower, &prefix_lower) {
         return Err("Image path is not a ClipToAll temp screenshot".to_string());
     }
     Ok(())
@@ -183,7 +175,7 @@ pub fn ensure_jpeg_for_upload(path: &str, output_scale: f32) -> Result<String, S
 /// A 1-2 char prefix (e.g. "a") is far too generic and could match unrelated
 /// files in %TEMP%, so such prefixes are ignored and only the built-in `cta_`
 /// pattern is cleaned up (BUGS#6).
-const MIN_CUSTOM_PREFIX_LEN: usize = 3;
+pub(crate) const MIN_CUSTOM_PREFIX_LEN: usize = 3;
 
 /// Strip a *known* ClipToAll prefix from a (lowercased) filename, returning the
 /// remainder. Always honors the built-in `cta_`; honors the user's configured
@@ -428,6 +420,14 @@ fn get_monitor_scale(x: i32, y: i32) -> f32 {
 /// only at upload/save-as time via `ensure_jpeg_for_upload`/`save_image_to_file`.
 #[tauri::command]
 pub fn save_image_base64(base64_data: String) -> Result<String, String> {
+    // Bound the payload before decoding so a malformed/hostile IPC call can't
+    // drive an unbounded allocation + disk write (memory/disk DoS). 384 MiB of
+    // base64 decodes to ~288 MiB — far above any real editor canvas (a full 8K
+    // multi-monitor PNG is well under this) yet a hard ceiling.
+    const MAX_BASE64_LEN: usize = 384 * 1024 * 1024;
+    if base64_data.len() > MAX_BASE64_LEN {
+        return Err("Image data too large".to_string());
+    }
     let data = base64::engine::general_purpose::STANDARD
         .decode(&base64_data)
         .map_err(|e| format!("Invalid base64: {}", e))?;

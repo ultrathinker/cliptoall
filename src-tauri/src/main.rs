@@ -380,7 +380,10 @@ fn register_hotkey(app: &AppHandle, shortcut: Shortcut) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn update_hotkey(app: AppHandle, hotkey: String) -> Result<(), String> {
+fn update_hotkey(window: tauri::Window, app: AppHandle, hotkey: String) -> Result<(), String> {
+    // Re-registering the global capture hotkey is a settings operation; gate it to
+    // the main window so a non-main WebView can't sabotage or hijack the hotkey.
+    commands::require_main_window(&window)?;
     let shortcut = parse_hotkey(&hotkey)?;
     register_hotkey(&app, shortcut)?;
     log(&format!("Hotkey updated to: {}", hotkey));
