@@ -1,6 +1,6 @@
 [package]
 name = "cliptoall-tauri2"
-version = "5.1.18"
+version = "5.1.19"
 description = "ClipToAll - Screenshot capture, annotation and upload tool"
 authors = ["ultrathinker"]
 edition = "2021"
