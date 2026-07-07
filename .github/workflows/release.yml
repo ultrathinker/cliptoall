@@ -63,8 +63,8 @@ jobs:
             - 5 themes, HiDPI-correct output
 
             See the [README](https://github.com/ultrathinker/cliptoall) for details.
-          # Draft = the release is built and assets attached automatically, but stays
-          # unpublished until you click "Publish" in the GitHub UI. Flip to false for
-          # fully-automatic publishing.
-          releaseDraft: true
+          # Fully automatic: the release is built, assets attached, AND published
+          # as soon as the tag build succeeds. Set to true to keep it a draft for
+          # manual review before publishing.
+          releaseDraft: false
           prerelease: false

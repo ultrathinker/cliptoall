@@ -72,5 +72,9 @@ jobs:
         continue-on-error: true
         run: npm audit --audit-level=high
 
-      - name: Build (Tauri)
-        run: npm run tauri build
+      # Frontend bundle only (fast). Clippy + tests above already compile all
+      # Rust code, so CI verifies everything compiles without the expensive full
+      # `tauri build` — the release workflow (release.yml, on version tags) does
+      # the full bundle.
+      - name: Build frontend
+        run: npm run build
