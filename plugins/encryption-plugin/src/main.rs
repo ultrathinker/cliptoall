@@ -3,14 +3,11 @@
 /// Provides AES-256-CBC encryption/decryption for clipboard text.
 /// Follows the ClipToAll plugin protocol (stdin/stdout JSON).
 
-use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::io::{self, BufRead, Write};
+mod crypto;
 
-type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
-type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+use crypto::Scheme;
+use serde::{Deserialize, Serialize};
+use std::io::{self, BufRead, Write};
 
 // ── Plugin metadata ─────────────────────────────────────────────
 const PLUGIN_NAME: &str = "Clipboard Encryption";
@@ -22,12 +19,17 @@ any messenger or email.\n\n\
 While the capture overlay is visible, press the assigned shortcut key to encrypt \
 or decrypt the text currently in your clipboard. Shortcut keys are shown \
 and configurable in Settings > Plugins.\n\n\
-Algorithm: AES Encrypt(CBC) key 256, IV 128, key=sha256(Password), \
-IV=sha256('ClipToAll') [first 16 bytes].\n\n\
-Try online: https://the-x.cn/en-us/cryptography/Aes.aspx";
-const SETTINGS_DESCRIPTION: &str = "Requires an encryption password. \
-The password is hashed with SHA-256 to derive the AES-256 key.";
-const SETTINGS_FORMAT: &str = r#"{"password": "your-password-here"}"#;
+Two schemes are available (set \"scheme\" in Settings):\n\
+• \"legacy\" (default) — AES-256-CBC, key=sha256(Password), IV=sha256('ClipToAll') \
+[first 16 bytes]. Compatible with the .NET version of ClipToAll and with anything \
+already encrypted. Try online: https://the-x.cn/en-us/cryptography/Aes.aspx\n\
+• \"strong\" (v2) — per-message random salt + PBKDF2-HMAC-SHA256 (600k rounds) + \
+AES-256-GCM (authenticated). Much stronger, but v2 output is NOT decryptable by \
+the .NET version. Decryption auto-detects both schemes, so old values keep working.";
+const SETTINGS_DESCRIPTION: &str = "Requires an encryption password. Optionally set \
+\"scheme\" to \"legacy\" (default, .NET-compatible) or \"strong\" (v2: PBKDF2 + \
+AES-256-GCM; stronger, but breaks .NET interop). Decryption auto-detects the scheme.";
+const SETTINGS_FORMAT: &str = r#"{"password": "your-password-here", "scheme": "legacy"}"#;
 
 /// Return the list of functions this plugin provides.
 fn functions() -> Vec<Function> {
@@ -45,60 +47,6 @@ fn functions() -> Vec<Function> {
     ]
 }
 
-// ── Crypto helpers ──────────────────────────────────────────────
-
-/// Derive AES-256 key from password: SHA-256(password).
-fn derive_key(password: &str) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(password.as_bytes());
-    hasher.finalize().into()
-}
-
-/// Derive IV: first 16 bytes of SHA-256("ClipToAll").
-fn derive_iv() -> [u8; 16] {
-    let mut hasher = Sha256::new();
-    hasher.update(b"ClipToAll");
-    let hash: [u8; 32] = hasher.finalize().into();
-    let mut iv = [0u8; 16];
-    iv.copy_from_slice(&hash[..16]);
-    iv
-}
-
-/// Encrypt plaintext with AES-256-CBC, return base64.
-fn encrypt_text(plaintext: &str, password: &str) -> Result<String, String> {
-    let key = derive_key(password);
-    let iv = derive_iv();
-
-    let plaintext_bytes = plaintext.as_bytes();
-
-    // Buffer must be large enough for plaintext + padding (up to 16 extra bytes)
-    let mut buf = vec![0u8; plaintext_bytes.len() + 16];
-    buf[..plaintext_bytes.len()].copy_from_slice(plaintext_bytes);
-
-    let ciphertext = Aes256CbcEnc::new(&key.into(), &iv.into())
-        .encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext_bytes.len())
-        .map_err(|e| format!("Encryption failed: {}", e))?;
-
-    Ok(BASE64.encode(ciphertext))
-}
-
-/// Decrypt base64 ciphertext with AES-256-CBC, return plaintext.
-fn decrypt_text(base64_input: &str, password: &str) -> Result<String, String> {
-    let key = derive_key(password);
-    let iv = derive_iv();
-
-    let mut ciphertext = BASE64
-        .decode(base64_input.trim())
-        .map_err(|e| format!("Invalid base64: {}", e))?;
-
-    let plaintext_bytes = Aes256CbcDec::new(&key.into(), &iv.into())
-        .decrypt_padded_mut::<Pkcs7>(&mut ciphertext)
-        .map_err(|_| "Decryption failed: wrong password or corrupted data".to_string())?;
-
-    String::from_utf8(plaintext_bytes.to_vec())
-        .map_err(|e| format!("Decrypted data is not valid UTF-8: {}", e))
-}
-
 // ── Clipboard helpers ───────────────────────────────────────────
 
 fn read_clipboard() -> Result<String, String> {
@@ -114,18 +62,20 @@ fn write_clipboard(text: &str) -> Result<(), String> {
 
 /// Handle a function call from ClipToAll.
 fn handle_call(function: &str, context: &CallContext) -> ResultMsg {
-    // Parse settings JSON to extract password
+    // Parse settings JSON to extract password and (optional) scheme.
     #[derive(Deserialize)]
     struct Settings {
         #[serde(default)]
         password: String,
+        #[serde(default)]
+        scheme: String,
     }
 
-    let password = if context.settings.is_empty() {
-        String::new()
+    let (password, scheme) = if context.settings.is_empty() {
+        (String::new(), Scheme::Legacy)
     } else {
         match serde_json::from_str::<Settings>(&context.settings) {
-            Ok(s) => s.password,
+            Ok(s) => (s.password, Scheme::from_setting(&s.scheme)),
             Err(e) => return ResultMsg::error(
                 format!("Invalid settings JSON: {}", e), None,
             ),
@@ -150,7 +100,7 @@ fn handle_call(function: &str, context: &CallContext) -> ResultMsg {
                 return ResultMsg::error("Clipboard is empty".into(), None);
             }
 
-            match encrypt_text(&text, &password) {
+            match crypto::encrypt_text(&text, &password, scheme) {
                 Ok(encrypted) => match write_clipboard(&encrypted) {
                     Ok(()) => ResultMsg::ok(Some("Clipboard encrypted".into())),
                     Err(e) => ResultMsg::error(e, None),
@@ -168,7 +118,7 @@ fn handle_call(function: &str, context: &CallContext) -> ResultMsg {
                 return ResultMsg::error("Clipboard is empty".into(), None);
             }
 
-            match decrypt_text(&text, &password) {
+            match crypto::decrypt_text(&text, &password) {
                 Ok(decrypted) => match write_clipboard(&decrypted) {
                     Ok(()) => ResultMsg::ok(Some("Clipboard decrypted".into())),
                     Err(e) => ResultMsg::error(e, None),

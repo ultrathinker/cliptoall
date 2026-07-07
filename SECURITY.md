@@ -14,7 +14,7 @@ ClipToAll is developed as a rolling release; only the latest published version r
 
 **Secrets at rest.** Sensitive settings (Amazon S3 access/secret keys, the Google Drive OAuth token, and the clipboard-encryption password) are stored on Windows using **DPAPI** (`CryptProtectData`, CurrentUser scope) in `%APPDATA%\ClipToAll\settings.json`. Encrypted fields are tagged with a `dpapi:` prefix. Encryption never silently falls back to plaintext — if DPAPI fails, the save fails.
 
-**Upload credentials.** S3 credentials are used only in the Rust backend; they are not passed across the IPC boundary to the WebView. Google Drive uses OAuth2 with PKCE; the token is stored separately and encrypted with DPAPI.
+**Upload credentials.** S3 credentials are decrypted server-side and used by the Rust backend to perform uploads; the upload command reads the keys from the in-memory settings cache, so they are never sent from the WebView. The `load_settings` command returns the decrypted S3 access/secret keys **only to the Settings window** (window label `main`), which needs them to display and edit the credentials; for every other window (Results/Editor) those two fields are blanked before crossing the IPC boundary. This limits the plaintext keys' exposure so an XSS in a non-settings WebView cannot read them. Google Drive uses OAuth2 with PKCE; the token is stored separately and encrypted with DPAPI, and is never returned to the WebView.
 
 **WebView hardening.** The app ships a restrictive Content-Security-Policy and scopes Tauri capabilities per window. The `read_image_base64` command is limited to the app's own temporary screenshot directory, and plugin execution paths are constrained to the plugins directory.
 

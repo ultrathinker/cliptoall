@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex; // non-poisoning; lock() returns the guard directly
 
 use super::upload_gdrive;
 
@@ -86,6 +87,10 @@ pub struct PoolInner {
     pub daemon_running: AtomicBool,
     /// Prevents concurrent maintain_pool executions
     pub maintenance_running: AtomicBool,
+    /// Notified on disconnect so the background daemon wakes from its long sleep
+    /// and terminates instead of polling forever against a disconnected account
+    /// (BUGS#9).
+    pub stop_signal: tokio::sync::Notify,
 }
 
 /// Tauri-managed state for the pre-allocation pool
@@ -137,6 +142,7 @@ pub fn init_pool() -> PoolRuntime {
             state: Mutex::new(state),
             daemon_running: AtomicBool::new(false),
             maintenance_running: AtomicBool::new(false),
+            stop_signal: tokio::sync::Notify::new(),
         }),
     }
 }
@@ -168,19 +174,40 @@ pub fn start_daemon(pool: Arc<PoolInner>) {
     });
 }
 
+/// Signal the daemon to stop and prevent it being considered "running". Called
+/// on gdrive_disconnect so the pre-allocation loop doesn't keep polling against
+/// a disconnected account (BUGS#9). A later gdrive_authorize re-spawns it.
+pub fn stop_daemon(pool: &PoolInner) {
+    pool.daemon_running.store(false, Ordering::SeqCst);
+    pool.stop_signal.notify_waiters();
+}
+
 async fn daemon_loop(pool: Arc<PoolInner>) {
     loop {
+        // Stop was requested (e.g. gdrive_disconnect) — exit the loop.
+        if !pool.daemon_running.load(Ordering::SeqCst) {
+            break;
+        }
         if let Err(e) = maintain_pool(&pool).await {
             crate::log(&format!("[gdrive_pool] maintain error: {}", e));
+        }
+        // Re-check after the (possibly long) maintenance work.
+        if !pool.daemon_running.load(Ordering::SeqCst) {
+            break;
         }
         // Adaptive sleep: retry sooner when pool is depleted
         let available = {
             let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-            let state = pool.state.lock().unwrap();
+            let state = pool.state.lock();
             state.available_for(&today)
         };
         let sleep_secs = if available < POOL_SIZE_PER_DAY { 300 } else { 3600 };
-        tokio::time::sleep(std::time::Duration::from_secs(sleep_secs)).await;
+        // Wake early if a stop is signalled, so disconnect doesn't leave the
+        // daemon sleeping for up to an hour before it notices (BUGS#9).
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(sleep_secs)) => {}
+            _ = pool.stop_signal.notified() => { break; }
+        }
     }
 }
 
@@ -217,7 +244,7 @@ async fn maintain_pool_inner(pool: &PoolInner) -> Result<(), String> {
 
     // Invalidate cache if folder_name changed
     {
-        let mut state = pool.state.lock().unwrap();
+        let mut state = pool.state.lock();
         if state.folder_name != *folder_name {
             state.folder_cache.clear();
             state.folder_name = folder_name.clone();
@@ -244,7 +271,7 @@ async fn maintain_pool_inner(pool: &PoolInner) -> Result<(), String> {
 
         // Count unclaimed placeholders for this date
         let existing_count = {
-            let state = pool.state.lock().unwrap();
+            let state = pool.state.lock();
             state.available_for(&date_str)
         };
 
@@ -252,7 +279,7 @@ async fn maintain_pool_inner(pool: &PoolInner) -> Result<(), String> {
         for _ in 0..needed {
             match create_placeholder(&client, &access_token, &folder_id).await {
                 Ok(ph) => {
-                    let mut state = pool.state.lock().unwrap();
+                    let mut state = pool.state.lock();
                     state.placeholders.push(PlaceholderFile {
                         file_id: ph.0,
                         url: ph.1,
@@ -273,7 +300,7 @@ async fn maintain_pool_inner(pool: &PoolInner) -> Result<(), String> {
     cleanup_old_placeholders(pool, &client, &access_token, &today).await;
 
     // Persist — clone state, release lock, then write to disk
-    let state_snapshot = pool.state.lock().unwrap().clone();
+    let state_snapshot = pool.state.lock().clone();
     save_pool_state(&state_snapshot);
 
     Ok(())
@@ -294,7 +321,7 @@ pub async fn ensure_today_folder_cached(
     // keys are namespaced by folder_name so a stale key never collides, but we
     // still clear so old entries don't linger for the whole day.
     {
-        let mut state = pool.state.lock().unwrap();
+        let mut state = pool.state.lock();
         if state.folder_name != *folder_name {
             state.folder_cache.clear();
             state.folder_name = folder_name.to_string();
@@ -318,7 +345,7 @@ async fn ensure_date_folder_cached(
 
     // Check cache first
     {
-        let state = pool.state.lock().unwrap();
+        let state = pool.state.lock();
         if let Some(folder_id) = state.folder_cache.get(&path_key) {
             return Ok(folder_id.clone());
         }
@@ -349,7 +376,7 @@ async fn get_or_create_folder(
 ) -> Result<String, String> {
     // Check cache
     {
-        let state = pool.state.lock().unwrap();
+        let state = pool.state.lock();
         if let Some(id) = state.folder_cache.get(cache_key) {
             return Ok(id.clone());
         }
@@ -360,7 +387,7 @@ async fn get_or_create_folder(
 
     // Cache it
     {
-        let mut state = pool.state.lock().unwrap();
+        let mut state = pool.state.lock();
         state.folder_cache.insert(cache_key.to_string(), id.clone());
     }
 
@@ -439,7 +466,7 @@ async fn create_placeholder(
 /// Claim a placeholder for today. Returns (file_id, url) or None.
 pub fn claim_placeholder(pool: &PoolInner) -> Option<(String, String)> {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let mut state = pool.state.lock().unwrap();
+    let mut state = pool.state.lock();
     let idx = state.find_claimable(&today)?;
     let ph = &mut state.placeholders[idx];
     ph.claimed = true;
@@ -517,7 +544,7 @@ async fn cleanup_old_placeholders(
 
     // Collect unclaimed placeholders from past dates
     let to_check: Vec<PlaceholderFile> = {
-        let state = pool.state.lock().unwrap();
+        let state = pool.state.lock();
         state
             .placeholders
             .iter()
@@ -560,7 +587,7 @@ async fn cleanup_old_placeholders(
 
     // Apply changes
     if !deleted_ids.is_empty() || !mark_claimed_ids.is_empty() {
-        let mut state = pool.state.lock().unwrap();
+        let mut state = pool.state.lock();
         state.placeholders.retain(|p| !deleted_ids.contains(&p.file_id));
         for p in state.placeholders.iter_mut() {
             if mark_claimed_ids.contains(&p.file_id) {
@@ -638,7 +665,7 @@ async fn delete_file(
 // ── Pool clearing (for gdrive_disconnect) ────────────────────────
 
 pub fn clear_pool(pool: &PoolInner) {
-    let mut state = pool.state.lock().unwrap();
+    let mut state = pool.state.lock();
     state.placeholders.clear();
     state.folder_cache.clear();
     state.folder_name.clear();

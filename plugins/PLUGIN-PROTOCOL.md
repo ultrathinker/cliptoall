@@ -226,7 +226,7 @@ The protocol is simple line-delimited JSON over stdin/stdout. You can write plug
 
 Copy plugin files to the `plugins/` folder next to `ClipToAll.exe`. The host scans this folder for `.exe`, `.py`, `.cs`, and `.ps1` files.
 
-Plugins are sorted by **file modification time** (most recently modified first), not alphabetically.
+Plugins are sorted by **file modification time** (oldest first — chronological/date-added order), not alphabetically. The Plugins tab defaults to this order ("By date added") and offers an optional "By name" sort.
 
 ### C# Pre-compilation
 

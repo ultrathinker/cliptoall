@@ -39,7 +39,7 @@ pub fn discover_plugins() -> Vec<DiscoveredPlugin> {
 /// Get currently running plugins with their key bindings.
 #[tauri::command]
 pub fn get_active_plugins(state: State<PluginManagerState>) -> Vec<ActivePlugin> {
-    let mgr = state.0.lock().unwrap();
+    let mgr = state.0.lock();
     mgr.get_active_plugins()
 }
 
@@ -51,7 +51,7 @@ pub fn start_plugin(
     key_bindings: std::collections::HashMap<String, String>,
 ) -> Result<(), String> {
     ensure_in_plugins_dir(std::path::Path::new(&path))?;
-    let mut mgr = state.0.lock().unwrap();
+    let mut mgr = state.0.lock();
     mgr.start_plugin(&path, &key_bindings)?;
     Ok(())
 }
@@ -59,7 +59,7 @@ pub fn start_plugin(
 /// Stop a plugin (disable it).
 #[tauri::command]
 pub fn stop_plugin(state: State<PluginManagerState>, path: String) -> Result<(), String> {
-    let mut mgr = state.0.lock().unwrap();
+    let mut mgr = state.0.lock();
     mgr.stop_plugin(&path);
     Ok(())
 }
@@ -75,7 +75,7 @@ pub fn apply_plugin_config(
             .map_err(|e| format!("Invalid plugin path '{}': {}", cfg.path, e))?;
     }
 
-    let mut mgr = state.0.lock().unwrap();
+    let mut mgr = state.0.lock();
 
     // Stop all current plugins
     mgr.stop_all();

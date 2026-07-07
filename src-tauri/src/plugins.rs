@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::Mutex;
+use parking_lot::Mutex; // non-poisoning; used for PluginManagerState
 
 #[cfg(windows)]
 use windows::Win32::Foundation::HANDLE;

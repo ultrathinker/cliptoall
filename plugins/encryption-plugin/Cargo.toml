@@ -10,4 +10,8 @@ aes = "0.8"
 cbc = "0.1"
 sha2 = "0.10"
 base64 = "0.22"
+# Strong (v2) clipboard encryption: PBKDF2-HMAC-SHA256 KDF + AES-256-GCM.
+aes-gcm = "0.10"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+getrandom = "0.2"
 clipboard-win = "5.4"

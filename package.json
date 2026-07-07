@@ -1,6 +1,6 @@
 {
   "name": "cliptoall-tauri2",
-  "version": "5.1.14",
+  "version": "5.1.15",
   "description": "ClipToAll - Screenshot capture, annotation and upload tool",
   "type": "module",
   "license": "Apache-2.0",

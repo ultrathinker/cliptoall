@@ -38,6 +38,9 @@ pub fn clear_clipboard() {
 /// on HiDPI captures. The source stays a full-res lossless working copy.
 #[tauri::command]
 pub fn copy_image_to_clipboard(path: String, output_scale: f32) -> Result<(), String> {
+    // Only ever read the app's own temp screenshot — a compromised WebView must
+    // not be able to copy an arbitrary readable file to the clipboard (BUGS#3).
+    crate::commands::capture::ensure_temp_screenshot_path(&path)?;
     // Decode image, then apply the output downscale (no-op unless enabled + HiDPI).
     let img = image::open(&path).map_err(|e| format!("Failed to open image: {}", e))?;
     let rgb = crate::commands::capture::apply_output_downscale(img.to_rgb8(), output_scale);

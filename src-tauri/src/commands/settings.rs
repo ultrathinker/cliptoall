@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::sync::{Mutex, RwLock};
+use parking_lot::{Mutex, RwLock}; // non-poisoning; read()/write()/lock() return guards directly
 use tauri::{AppHandle, Emitter};
 
 /// In-memory cache of the decrypted settings — avoids re-reading + DPAPI-decrypting
@@ -104,14 +104,28 @@ fn get_settings_path() -> PathBuf {
 }
 
 #[tauri::command]
-pub fn load_settings() -> Result<AppSettings, String> {
+pub fn load_settings(window: tauri::Window) -> Result<AppSettings, String> {
     let path = get_settings_path();
-    if !path.exists() {
+    let mut settings = if !path.exists() {
         let default = AppSettings::default();
         save_settings_to_disk(default.clone())?;
-        return Ok(default);
+        default
+    } else {
+        load_settings_sync()
+    };
+
+    // Only the Settings UI (the "main" window) may receive the decrypted S3
+    // secrets — it needs them to display/edit the credentials. Every other
+    // window (Results/Editor) loads settings only for theme/behaviour and never
+    // needs the plaintext keys: S3 upload runs backend-side and reads the keys
+    // straight from the settings cache (see upload_s3 + load_settings_sync).
+    // Blanking here keeps an XSS in a non-settings WebView from reading the S3
+    // credentials over the IPC boundary (#1 / 3.8).
+    if window.label() != "main" {
+        settings.amazon_access_key_id = String::new();
+        settings.amazon_secret_access_key = String::new();
     }
-    Ok(load_settings_sync())
+    Ok(settings)
 }
 
 /// Read + decrypt settings straight from disk (no cache). Returns defaults if
@@ -138,13 +152,13 @@ fn read_settings_from_disk() -> AppSettings {
 /// Rust (main.rs hotkey/tray/crop) — avoids repeated disk reads + DPAPI decrypts.
 pub fn load_settings_sync() -> AppSettings {
     {
-        let cache = SETTINGS_CACHE.read().unwrap();
+        let cache = SETTINGS_CACHE.read();
         if let Some(s) = cache.as_ref() {
             return s.clone();
         }
     }
     let loaded = read_settings_from_disk();
-    *SETTINGS_CACHE.write().unwrap() = Some(loaded.clone());
+    *SETTINGS_CACHE.write() = Some(loaded.clone());
     loaded
 }
 
@@ -183,7 +197,7 @@ pub fn save_settings(app: AppHandle, settings: AppSettings) -> Result<(), String
 pub fn save_settings_to_disk(settings: AppSettings) -> Result<(), String> {
     // Serialize writers so a Results-resize save and a Settings save can't
     // interleave and clobber each other (3.12).
-    let _guard = SETTINGS_WRITE_LOCK.lock().unwrap();
+    let _guard = SETTINGS_WRITE_LOCK.lock();
 
     // Normalize + keep the legacy downscale_for_dpi boolean in sync with the
     // canonical output_mode (back-compat if an older build ever reads the file).
@@ -224,6 +238,6 @@ pub fn save_settings_to_disk(settings: AppSettings) -> Result<(), String> {
         .map_err(|e| format!("Failed to commit settings: {}", e))?;
 
     // Refresh the cache with the plaintext version.
-    *SETTINGS_CACHE.write().unwrap() = Some(settings);
+    *SETTINGS_CACHE.write() = Some(settings);
     Ok(())
 }

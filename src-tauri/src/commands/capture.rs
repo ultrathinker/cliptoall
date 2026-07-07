@@ -21,7 +21,7 @@ pub fn read_image_base64(path: String) -> Result<String, String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
 }
 
-fn ensure_temp_screenshot_path(path: &str) -> Result<(), String> {
+pub(crate) fn ensure_temp_screenshot_path(path: &str) -> Result<(), String> {
     let path = std::path::Path::new(path);
     let canonical = path
         .canonicalize()
@@ -177,24 +177,84 @@ pub fn ensure_jpeg_for_upload(path: &str, output_scale: f32) -> Result<String, S
     Ok(out.to_string_lossy().to_string())
 }
 
+/// Minimum length a *custom* prefix must have before we trust it for deletion.
+/// A 1-2 char prefix (e.g. "a") is far too generic and could match unrelated
+/// files in %TEMP%, so such prefixes are ignored and only the built-in `cta_`
+/// pattern is cleaned up (BUGS#6).
+const MIN_CUSTOM_PREFIX_LEN: usize = 3;
+
+/// Strip a *known* ClipToAll prefix from a (lowercased) filename, returning the
+/// remainder. Always honors the built-in `cta_`; honors the user's configured
+/// prefix only if it is specific enough (see `MIN_CUSTOM_PREFIX_LEN`). Never
+/// matches on an empty/too-short prefix.
+fn strip_known_prefix<'a>(name: &'a str, prefix: &str) -> Option<&'a str> {
+    if let Some(rest) = name.strip_prefix("cta_") {
+        return Some(rest);
+    }
+    if prefix.len() >= MIN_CUSTOM_PREFIX_LEN {
+        if let Some(rest) = name.strip_prefix(prefix) {
+            return Some(rest);
+        }
+    }
+    None
+}
+
+/// True if the remainder after the prefix matches the app's generated timestamp
+/// stem `YYYY_MM_DD_HH_MM_SS_xxx` (see `output_filename_ext`). Requiring this
+/// shape means even a valid prefix can only ever match our own files, never an
+/// unrelated `<prefix>foo.png` a user happened to drop in %TEMP% (BUGS#6).
+fn matches_timestamp_stem(stem: &str) -> bool {
+    let parts: Vec<&str> = stem.split('_').collect();
+    // 6 date/time groups + at least one random-suffix group.
+    if parts.len() < 7 {
+        return false;
+    }
+    const LENS: [usize; 6] = [4, 2, 2, 2, 2, 2];
+    for (part, &len) in parts.iter().zip(LENS.iter()) {
+        if part.len() != len || !part.bytes().all(|b| b.is_ascii_digit()) {
+            return false;
+        }
+    }
+    !parts[6].is_empty()
+}
+
+/// True if `name` (already lowercased) is a file ClipToAll itself generated and
+/// is therefore safe to auto-delete: `<prefix>YYYY_MM_DD_HH_MM_SS_xxx.(png|jpg|
+/// jpeg)`, or the legacy fixed-name fullscreen bitmap. `prefix` is the (already
+/// lowercased) configured image prefix.
+fn is_app_screenshot_name(name: &str, prefix: &str) -> bool {
+    // Legacy fullscreen bitmap written by older builds (exact name).
+    if name == "cliptoall_fullscreen.bmp" {
+        return true;
+    }
+    let Some(rest) = strip_known_prefix(name, prefix) else {
+        return false;
+    };
+    let Some((stem, ext)) = rest.rsplit_once('.') else {
+        return false;
+    };
+    if !matches!(ext, "png" | "jpg" | "jpeg") {
+        return false;
+    }
+    matches_timestamp_stem(stem)
+}
+
 /// Delete leftover temp screenshots older than 7 days from our temp subdir and
 /// the flat temp dir (older builds wrote there). Called once at startup so the
 /// temp folder doesn't grow without bound (BUGS#7).
 pub fn cleanup_temp_files() {
     let now = std::time::SystemTime::now();
     let max_age = std::time::Duration::from_secs(7 * 24 * 3600);
-    // Match the default prefix, the configured prefix (if customized), and the
-    // legacy fullscreen bitmap, so a custom prefix doesn't defeat cleanup (BUGS#7).
+    // Only delete files that match the app's own generated filename pattern.
+    // A short/empty custom prefix is ignored so cleanup can never sweep away
+    // unrelated files that merely share a generic prefix (BUGS#6).
     let prefix = crate::commands::settings::load_settings_sync().image_prefix.to_lowercase();
     let dir = std::env::temp_dir();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_lowercase();
-            let ours = name.starts_with("cta_")
-                || (!prefix.is_empty() && name.starts_with(&prefix))
-                || name == "cliptoall_fullscreen.bmp";
-            if !ours { continue; }
+            if !is_app_screenshot_name(&name, &prefix) { continue; }
             if let Ok(meta) = entry.metadata() {
                 if let Ok(modified) = meta.modified() {
                     if now.duration_since(modified).map(|age| age > max_age).unwrap_or(false) {
@@ -225,6 +285,32 @@ pub fn capture_to_memory() -> Result<CaptureData, String> {
         // (MSDN: an object must not be deleted while selected into a DC — 3.9).
         let old_bitmap = SelectObject(hdc_mem, hbitmap);
 
+        // RAII guard: release ALL acquired GDI objects on EVERY exit path,
+        // including the early `?`/return paths below. Previously an early return
+        // (e.g. BitBlt or GetDIBits failure) leaked the HDCs/HBITMAP, so repeated
+        // capture failures exhausted GDI handles (BUGS#5). Drop runs the exact
+        // MSDN-ordered teardown once, replacing the old manual cleanup on the
+        // success path: restore the DC's original bitmap, delete our bitmap,
+        // delete the memory DC, then release the screen DC.
+        struct GdiGuard {
+            hdc_screen: HDC,
+            hdc_mem: HDC,
+            hbitmap: HBITMAP,
+            old_bitmap: HGDIOBJ,
+        }
+        impl Drop for GdiGuard {
+            fn drop(&mut self) {
+                unsafe {
+                    // Restore the DC's original bitmap before deleting ours.
+                    SelectObject(self.hdc_mem, self.old_bitmap);
+                    let _ = DeleteObject(self.hbitmap);
+                    let _ = DeleteDC(self.hdc_mem);
+                    let _ = ReleaseDC(None, self.hdc_screen);
+                }
+            }
+        }
+        let _gdi = GdiGuard { hdc_screen, hdc_mem, hbitmap, old_bitmap };
+
         BitBlt(hdc_mem, 0, 0, screen_width, screen_height, hdc_screen, screen_left, screen_top, SRCCOPY)
             .ok().ok_or("BitBlt failed")?;
         crate::log(&format!("    [capture] BitBlt done | +{}ms", t0.elapsed().as_millis()));
@@ -247,14 +333,9 @@ pub fn capture_to_memory() -> Result<CaptureData, String> {
             Some(buffer.as_mut_ptr() as *mut _), &mut bmp_info, DIB_RGB_COLORS);
         crate::log(&format!("    [capture] GetDIBits done ({} lines) | +{}ms", scan_lines, t0.elapsed().as_millis()));
 
-        // Restore the DC's original bitmap before deleting ours (MSDN contract).
-        SelectObject(hdc_mem, old_bitmap);
-        let _ = DeleteObject(hbitmap);
-        let _ = DeleteDC(hdc_mem);
-        let _ = ReleaseDC(None, hdc_screen);
-
         // A zero return means GetDIBits failed — the buffer would be black, so
         // report the error instead of silently handing back an empty screenshot.
+        // GDI teardown is handled by `_gdi`'s Drop on this early return too.
         if scan_lines == 0 {
             return Err("GetDIBits failed to copy pixels".to_string());
         }

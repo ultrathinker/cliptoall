@@ -18,6 +18,10 @@ pub async fn upload_to_s3(
         return Err("S3 storage is not configured. Go to Settings and enter your S3 credentials.".to_string());
     }
 
+    // Only ever upload the app's own temp screenshot — a compromised WebView must
+    // not be able to hand us an arbitrary path to exfiltrate (BUGS#3).
+    super::capture::ensure_temp_screenshot_path(&image_path)?;
+
     // Working copies are full-res lossless PNG — transcode to JPEG (and apply the
     // DPI downscale for output if enabled) once here, at the configured quality.
     let image_path = super::capture::ensure_jpeg_for_upload(&image_path, output_scale)?;

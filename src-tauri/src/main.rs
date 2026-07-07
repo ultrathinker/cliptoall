@@ -8,7 +8,7 @@ mod plugins;
 mod utils;
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use parking_lot::Mutex; // non-poisoning; lock() returns the guard directly
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
@@ -96,11 +96,8 @@ fn start_capture(app: AppHandle) {
         // 2. Build plugin key map for the overlay
         let key_map = {
             if let Some(state) = app.try_state::<plugins::PluginManagerState>() {
-                if let Ok(mgr) = state.0.lock() {
-                    overlay::build_vk_key_map(mgr.get_key_map())
-                } else {
-                    std::collections::HashMap::new()
-                }
+                let mgr = state.0.lock();
+                overlay::build_vk_key_map(mgr.get_key_map())
             } else {
                 std::collections::HashMap::new()
             }
@@ -138,7 +135,7 @@ fn start_capture(app: AppHandle) {
 
                 if let Some(state) = app.try_state::<plugins::PluginManagerState>() {
                     // Decide dispatch under a SHORT lock (just a map lookup)...
-                    let target = state.0.lock().ok().and_then(|mgr| mgr.resolve_call(&path));
+                    let target = state.0.lock().resolve_call(&path);
                     // ...then execute. Oneshot runs lock-free (bounded by its own
                     // 30s timeout) so a hung script can't wedge the mutex that the
                     // hotkey / Plugins tab / Exit all need. Daemon runs under the
@@ -147,8 +144,9 @@ fn start_capture(app: AppHandle) {
                         Some(plugins::CallTarget::Oneshot { plugin_type }) => Some(
                             plugins::PluginManager::run_oneshot(&path, plugin_type, &function_id, plugin_settings.as_deref())
                         ),
-                        Some(plugins::CallTarget::Daemon) => state.0.lock().ok()
-                            .map(|mut mgr| mgr.call_function_daemon(&path, &function_id, plugin_settings.as_deref())),
+                        Some(plugins::CallTarget::Daemon) => Some(
+                            state.0.lock().call_function_daemon(&path, &function_id, plugin_settings.as_deref())
+                        ),
                         None => {
                             log(&format!("  plugin not running: {}", path));
                             None
@@ -199,7 +197,7 @@ fn start_capture(app: AppHandle) {
                         let window_id = &uuid::Uuid::new_v4().to_string()[..8];
                         let label = format!("results-{}", window_id);
 
-                        app.state::<PendingResults>().0.lock().unwrap()
+                        app.state::<PendingResults>().0.lock()
                             .insert(label.clone(), PendingImage { path: image_path, copy_image_mode: copy_image, output_scale });
 
                         // Load saved window size from settings
@@ -256,7 +254,7 @@ fn get_pending_image(window: tauri::Window, state: tauri::State<'_, PendingResul
     // Non-destructive read: the entry is removed when the window is destroyed
     // (see on_window_event), so a WebView reload re-initializes instead of
     // showing a blank window (BUGS#11).
-    state.0.lock().unwrap().get(window.label()).map(|p| PendingImageResult {
+    state.0.lock().get(window.label()).map(|p| PendingImageResult {
         path: p.path.clone(),
         copy_image_mode: p.copy_image_mode,
         output_scale: p.output_scale,
@@ -349,7 +347,7 @@ fn parse_hotkey(s: &str) -> Result<Shortcut, String> {
 /// means that if the new combo is already taken by another app, the failure
 /// leaves the existing hotkey working instead of dropping it (3.4).
 fn register_hotkey(app: &AppHandle, shortcut: Shortcut) -> Result<(), String> {
-    let mut current = CURRENT_SHORTCUT.lock().unwrap();
+    let mut current = CURRENT_SHORTCUT.lock();
     if current.as_ref() == Some(&shortcut) {
         return Ok(()); // already registered — nothing to do
     }
@@ -463,9 +461,8 @@ fn main() {
                         "quit" => {
                             // Stop all plugins before exit
                             if let Some(state) = app.try_state::<plugins::PluginManagerState>() {
-                                if let Ok(mut mgr) = state.0.lock() {
-                                    plugins::PluginManager::stop_all(&mut mgr);
-                                }
+                                let mut mgr = state.0.lock();
+                                plugins::PluginManager::stop_all(&mut mgr);
                             }
                             std::process::exit(0);
                         }
@@ -514,7 +511,7 @@ fn main() {
             {
                 let plugin_configs = commands::plugins::load_plugin_configs_sync();
                 let plugin_state = app.state::<plugins::PluginManagerState>();
-                let mut mgr = plugin_state.0.lock().unwrap();
+                let mut mgr = plugin_state.0.lock();
                 for cfg in &plugin_configs {
                     if !cfg.enabled { continue; }
                     if let Err(e) = commands::plugins::ensure_in_plugins_dir(
@@ -579,7 +576,7 @@ fn main() {
                 // so the map doesn't grow unbounded across captures (BUGS#5/#11).
                 WindowEvent::Destroyed if window.label() != "main" => {
                     if let Some(state) = window.try_state::<PendingResults>() {
-                        state.0.lock().unwrap().remove(window.label());
+                        state.0.lock().remove(window.label());
                     }
                 }
                 _ => {}

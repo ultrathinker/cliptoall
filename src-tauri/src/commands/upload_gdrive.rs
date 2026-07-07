@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::net::TcpListener;
 use std::io::{BufRead, BufReader, Write};
 use tauri_plugin_opener::OpenerExt;
-use std::sync::Mutex;
+use parking_lot::Mutex; // non-poisoning; lock() returns the guard directly
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -69,12 +69,14 @@ fn wait_for_oauth_code(
                     return Err("Authorization rejected: state mismatch (possible CSRF).".to_string());
                 }
 
-                let code = request_line
-                    .split_whitespace()
-                    .nth(1)
-                    .and_then(|path| path.split("code=").nth(1))
-                    .and_then(|c| c.split('&').next())
-                    .map(|s| s.to_string());
+                // Parse the query properly: pick the exact `code` param (so a
+                // substring like `promo_code=` can't be mistaken for it) and
+                // URL-decode its value (BUGS#8).
+                let code = extract_query_param(&request_line, "code").map(|raw| {
+                    urlencoding::decode(&raw)
+                        .map(|c| c.into_owned())
+                        .unwrap_or(raw)
+                });
 
                 match code {
                     Some(c) => {
@@ -209,7 +211,7 @@ fn delete_token_from_disk() {
 
 /// Ensure token is loaded from disk into memory (called on first use)
 fn ensure_loaded() {
-    let mut guard = GDRIVE_TOKEN.lock().unwrap();
+    let mut guard = GDRIVE_TOKEN.lock();
     if guard.is_none() {
         if let Some(saved) = load_token_from_disk() {
             *guard = Some(saved);
@@ -221,7 +223,7 @@ fn ensure_loaded() {
 pub async fn get_valid_token() -> Result<String, String> {
     ensure_loaded();
 
-    let token = GDRIVE_TOKEN.lock().unwrap().clone()
+    let token = GDRIVE_TOKEN.lock().clone()
         .ok_or("Not authorized. Please connect to Google Drive.")?;
 
     // If token expires in less than 60 seconds, refresh it
@@ -252,7 +254,7 @@ pub async fn get_valid_token() -> Result<String, String> {
         };
 
         save_token_to_disk(&refreshed)?;
-        *GDRIVE_TOKEN.lock().unwrap() = Some(refreshed);
+        *GDRIVE_TOKEN.lock() = Some(refreshed);
 
         Ok(resp.access_token)
     } else {
@@ -335,7 +337,7 @@ pub async fn gdrive_authorize(
     };
 
     save_token_to_disk(&saved)?;
-    *GDRIVE_TOKEN.lock().unwrap() = Some(saved);
+    *GDRIVE_TOKEN.lock() = Some(saved);
 
     let user_info: serde_json::Value = client
         .get("https://www.googleapis.com/drive/v3/about?fields=user")
@@ -368,6 +370,8 @@ pub async fn gdrive_upload(
     folder_name: String,
     output_scale: f32,
 ) -> Result<String, String> {
+    // Reject any path outside the app's temp screenshot dir (BUGS#3).
+    super::capture::ensure_temp_screenshot_path(&image_path)?;
     // Guarantee JPEG bytes (+ output downscale if enabled) even if invoked
     // directly with a full-res PNG working copy.
     let image_path = super::capture::ensure_jpeg_for_upload(&image_path, output_scale)?;
@@ -550,15 +554,18 @@ pub async fn find_or_create_folder(
 #[tauri::command]
 pub fn gdrive_has_token() -> bool {
     ensure_loaded();
-    GDRIVE_TOKEN.lock().unwrap().is_some()
+    GDRIVE_TOKEN.lock().is_some()
 }
 
 #[tauri::command]
 pub fn gdrive_disconnect(
     pool: tauri::State<'_, super::gdrive_pool::PoolRuntime>,
 ) -> Result<(), String> {
-    *GDRIVE_TOKEN.lock().unwrap() = None;
+    *GDRIVE_TOKEN.lock() = None;
     delete_token_from_disk();
+    // Stop the pre-allocation daemon before clearing state, so it doesn't keep
+    // running (and re-populating) against the now-disconnected account (BUGS#9).
+    super::gdrive_pool::stop_daemon(&pool.inner);
     super::gdrive_pool::clear_pool(&pool.inner);
     Ok(())
 }
@@ -581,6 +588,8 @@ pub async fn gdrive_upload_pooled(
     output_scale: f32,
     pool: tauri::State<'_, super::gdrive_pool::PoolRuntime>,
 ) -> Result<GdriveUploadResult, String> {
+    // Reject any path outside the app's temp screenshot dir (BUGS#3).
+    super::capture::ensure_temp_screenshot_path(&image_path)?;
     // Working copies are full-res lossless PNG — transcode to JPEG (+ output
     // downscale if enabled) ONCE here so the placeholder PATCH / fallback upload
     // carry the final bytes and downstream paths never re-process them.

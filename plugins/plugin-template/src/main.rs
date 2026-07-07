@@ -33,16 +33,16 @@ fn functions() -> Vec<Function> {
 
 /// Handle a function call from ClipToAll.
 /// `function` is the function id (e.g. "greet").
-/// `context` contains info about the foreground window.
+/// `context.settings` is a JSON string with the user-configured settings for
+/// this plugin (empty if none) — parse it yourself. The host does NOT pass
+/// window info; if you need the foreground window, call GetForegroundWindow()
+/// yourself after a brief delay (see PLUGIN-PROTOCOL.md).
 /// Return a Result message to send back.
 fn handle_call(function: &str, context: &CallContext) -> ResultMsg {
     match function {
         "greet" => {
-            // Example: just log the window info
-            eprintln!(
-                "Hello from plugin! Window: {} (class: {}, hwnd: {})",
-                context.hwnd_title, context.hwnd_class, context.hwnd
-            );
+            // Example: settings arrive as a JSON string in context.settings.
+            eprintln!("Hello from plugin! settings = {}", context.settings);
             ResultMsg::ok(Some("Hello World!".into()))
         }
         _ => ResultMsg::error(format!("Unknown function: {}", function), None),
@@ -80,12 +80,10 @@ struct Command {
 
 #[derive(Deserialize, Default)]
 struct CallContext {
+    /// User-configured settings for this plugin, as a JSON string (empty if none).
+    /// The plugin parses this itself. See PLUGIN-PROTOCOL.md.
     #[serde(default)]
-    hwnd: i64,
-    #[serde(default)]
-    hwnd_title: String,
-    #[serde(default)]
-    hwnd_class: String,
+    settings: String,
 }
 
 #[derive(Serialize)]

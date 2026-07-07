@@ -5,6 +5,7 @@ dist/
 
 # Rust
 src-tauri/target/
+plugins/*/target/
 # Cargo.lock IS committed for this application (reproducible builds).
 
 # IDE

@@ -51,5 +51,26 @@ jobs:
       - name: Clippy
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
+      - name: Test (Rust)
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      # Install a prebuilt cargo-audit binary (no compile) — lighter than
+      # `cargo install cargo-audit`, and avoids rustsec/audit-check's assumption
+      # of a repo-root Cargo.lock (ours lives in src-tauri).
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      # Advisory audit is informational — a new RUSTSEC advisory shouldn't block
+      # an unrelated PR, so let it report without failing the build.
+      - name: Rust dependency audit
+        continue-on-error: true
+        run: cargo audit --file src-tauri/Cargo.lock
+
+      - name: npm dependency audit
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
       - name: Build (Tauri)
         run: npm run tauri build
