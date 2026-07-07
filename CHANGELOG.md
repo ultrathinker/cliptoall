@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 date-based patch versions.
 
+## [5.1.19]
+
+### Packaging
+
+- Publish a standalone portable `ClipToAll-<version>-portable.exe` alongside the
+  installer, so the app can be run without installing (same binary, frontend
+  embedded, autostart self-registered at runtime).
+- Ship only the NSIS installer; drop the redundant MSI.
+
+No functional code changes from 5.1.18.
+
 ## [5.1.18]
 
 ### Security
@@ -119,6 +130,7 @@ First open-source release of the Tauri 2 rewrite of ClipToAll.
 - Restrictive Content-Security-Policy and per-window capability scoping.
 - `read_image_base64` restricted to the temp screenshot directory; plugin execution constrained to the plugins directory.
 
+[5.1.19]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.19
 [5.1.18]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.18
 [5.1.17]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.17
 [5.1.16]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.16
