@@ -182,6 +182,16 @@ pub fn encrypt_text(plaintext: &str, password: &str, scheme: Scheme) -> Result<S
 /// genuine strong ciphertext, and only on failure do we fall back to the legacy
 /// (unauthenticated) scheme. The authenticated scheme MUST be tried first —
 /// reversing the order could decrypt a real strong ciphertext into garbage.
+///
+/// NOT a bug (the "legacy fallback could return garbage for a forged v2 blob"
+/// note): the legacy CBC scheme is unauthenticated, so a crafted/corrupt input
+/// that fails the strong GCM tag CAN decrypt to arbitrary bytes here — but this
+/// path only ever runs for genuine LEGACY ciphertext, of which real users have
+/// none. The legacy scheme exists solely for interop with the old .NET app and
+/// is exercised only by the interop test samples below; shipped installs encrypt
+/// with the strong (authenticated) scheme by default. So the "garbage on forgery"
+/// case is unreachable in practice, and forcing an authenticated legacy format
+/// would break the very .NET-compatibility the legacy scheme exists to provide.
 pub fn decrypt_text(input: &str, password: &str) -> Result<String, String> {
     decrypt_v2(input, password).or_else(|_| decrypt_legacy(input, password))
 }

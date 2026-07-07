@@ -1,9 +1,15 @@
 {
   "identifier": "results-window",
-  "description": "Capabilities for dynamically-created Results/Editor windows",
+  "description": "Capabilities for dynamically-created Results/Editor windows. core:default is intentionally expanded to its members MINUS core:event:default (which would grant allow-emit/allow-emit-to): these overlays must not be able to broadcast events (a compromised one could emit a spoofed settings-changed to poison the main window's store). They get only core:event:allow-listen/allow-unlisten below.",
   "windows": ["results-*"],
   "permissions": [
-    "core:default",
+    "core:path:default",
+    "core:app:default",
+    "core:image:default",
+    "core:resources:default",
+    "core:menu:default",
+    "core:tray:default",
+    "core:webview:default",
     "core:window:default",
     "core:window:allow-show",
     "core:window:allow-set-focus",

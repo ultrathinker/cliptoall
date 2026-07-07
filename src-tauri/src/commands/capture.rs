@@ -38,15 +38,15 @@ pub(crate) fn ensure_temp_screenshot_path(path: &str) -> Result<(), String> {
         .and_then(|n| n.to_str())
         .ok_or_else(|| "Invalid image filename".to_string())?;
     let name_lower = filename.to_lowercase();
-    let prefix_lower = crate::commands::settings::load_settings_sync()
-        .image_prefix
-        .to_lowercase();
-    // Use the SAME predicate as temp cleanup so both agree on exactly which files
-    // are ours: correct prefix (built-in `cta_`, or a configured prefix that meets
-    // MIN_CUSTOM_PREFIX_LEN), the generated timestamp stem, and a png/jpg/jpeg
-    // extension. This is strictly tighter than the old prefix+ext check, which
-    // accepted a one-character prefix and let a caller read/upload any %TEMP%\<c>*.png.
-    if !is_app_screenshot_name(&name_lower, &prefix_lower) {
+    // Recognize the file by ITS OWN generated signature — the timestamp stem
+    // (`YYYY_MM_DD_HH_MM_SS_<hex>`) plus a png/jpg/jpeg extension — regardless of
+    // the CURRENTLY-configured prefix. That signature is what a genuine ClipToAll
+    // screenshot always ends with, and being prefix-agnostic means changing
+    // `image_prefix` never invalidates a path a still-open Results/Editor window
+    // is holding (it was created under the OLD prefix). We read our own files
+    // generously; temp CLEANUP stays prefix-strict (is_app_screenshot_name) so it
+    // only ever DELETES conservatively. The old fullscreen bitmap is still allowed.
+    if !is_timestamped_screenshot_name(&name_lower) && name_lower != "cliptoall_fullscreen.bmp" {
         return Err("Image path is not a ClipToAll temp screenshot".to_string());
     }
     Ok(())
@@ -231,6 +231,40 @@ fn is_app_screenshot_name(name: &str, prefix: &str) -> bool {
         return false;
     }
     matches_timestamp_stem(stem)
+}
+
+/// True if `name` (already lowercased) ends with ClipToAll's generated screenshot
+/// signature — the timestamp stem `YYYY_MM_DD_HH_MM_SS_<suffix>` immediately
+/// before a `.png`/`.jpg`/`.jpeg` extension — REGARDLESS of the leading prefix.
+/// Used only by read/upload path validation (`ensure_temp_screenshot_path`): the
+/// prefix isn't a security boundary there (it's chosen by the user in the main
+/// window), the timestamp signature is what actually identifies our own files,
+/// and ignoring the prefix means a later `image_prefix` change can't invalidate a
+/// path an already-open window still holds. Cleanup keeps the prefix-strict
+/// `is_app_screenshot_name` so it never deletes files under a foreign prefix.
+fn is_timestamped_screenshot_name(name: &str) -> bool {
+    let Some((stem, ext)) = name.rsplit_once('.') else {
+        return false;
+    };
+    if !matches!(ext, "png" | "jpg" | "jpeg") {
+        return false;
+    }
+    // The generated name is `<prefix>YYYY_MM_DD_HH_MM_SS_<suffix>` and the suffix
+    // is a single group (hex, no underscore), so the date/time groups + suffix are
+    // exactly the LAST 7 underscore-separated groups; any prefix contributes only
+    // earlier groups.
+    let parts: Vec<&str> = stem.split('_').collect();
+    if parts.len() < 7 {
+        return false;
+    }
+    let tail = &parts[parts.len() - 7..];
+    const LENS: [usize; 6] = [4, 2, 2, 2, 2, 2];
+    for (part, &len) in tail.iter().zip(LENS.iter()) {
+        if part.len() != len || !part.bytes().all(|b| b.is_ascii_digit()) {
+            return false;
+        }
+    }
+    !tail[6].is_empty()
 }
 
 /// Delete leftover temp screenshots older than 7 days from our temp subdir and
@@ -532,4 +566,35 @@ pub fn save_image_to_file(source_path: String, output_scale: f32) -> Result<Opti
     }
 
     Ok(Some(final_path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timestamped_name_matches_any_prefix() {
+        // Built-in prefix, a custom prefix, an underscored prefix, and no prefix
+        // all end with the same generated signature and must be recognized.
+        for name in [
+            "cta_2026_07_07_09_03_01_deadbeef0123.png",
+            "shot_2026_07_07_09_03_01_deadbeef0123.jpg",
+            "my_shots_2026_07_07_09_03_01_deadbeef0123.jpeg",
+            "2026_07_07_09_03_01_deadbeef0123.png",
+        ] {
+            assert!(is_timestamped_screenshot_name(name), "should match: {name}");
+        }
+    }
+
+    #[test]
+    fn non_screenshot_names_rejected() {
+        for name in [
+            "secret.png",                              // no timestamp
+            "cta_2026_07_07_09_03_01_deadbeef.txt",    // wrong extension
+            "notes_2026.png",                          // partial timestamp
+            "2026_7_7_9_3_1_x.png",                    // wrong group widths
+        ] {
+            assert!(!is_timestamped_screenshot_name(name), "should reject: {name}");
+        }
+    }
 }

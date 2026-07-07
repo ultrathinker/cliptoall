@@ -56,22 +56,33 @@ fn wait_for_oauth_code(
                     }
                 }
 
-                // Ignore anything that isn't the authorization redirect.
-                if !request_line.contains("code=") {
+                // Ignore anything that is neither the success redirect (?code=) nor
+                // an error redirect (?error=): favicon / browser pre-flight hits.
+                let has_code = request_line.contains("code=");
+                let has_error = request_line.contains("error=");
+                if !has_code && !has_error {
                     let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\n\r\n");
                     continue;
                 }
 
-                // Verify the CSRF state BEFORE using the code (RFC 8252 §8.9). On a
-                // mismatch, reject THIS request but keep listening until the deadline
-                // instead of tearing down the whole flow — a stray/spoofed hit (or a
-                // late browser retry) with a wrong state must not abort a legitimate
-                // redirect that may still be on its way. The real code is only ever
-                // accepted when its state matches.
+                // Verify the CSRF state BEFORE acting on the redirect (RFC 8252 §8.9),
+                // for BOTH the success and the error case. On a mismatch, reject THIS
+                // request but keep listening until the deadline instead of tearing down
+                // the whole flow — a stray/spoofed hit (or a late browser retry) with a
+                // wrong state must not abort a legitimate redirect still on its way.
                 let returned_state = extract_query_param(&request_line, "state");
                 if returned_state.as_deref() != Some(expected_state) {
                     let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\nState mismatch");
                     continue;
+                }
+
+                // The user denied access (or Google returned an error): fail fast with
+                // a clear message instead of hanging until the 2-minute timeout.
+                if has_error {
+                    let reason = extract_query_param(&request_line, "error")
+                        .unwrap_or_else(|| "access_denied".to_string());
+                    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n<html><body><h1>Authorization cancelled</h1><p>You can close this window.</p></body></html>");
+                    return Err(format!("Google authorization was cancelled or denied ({}).", reason));
                 }
 
                 // Parse the query properly: pick the exact `code` param (so a
@@ -191,8 +202,9 @@ fn save_token_to_disk(token: &SavedToken) -> Result<(), String> {
         .map_err(|e| format!("Failed to serialize gdrive token: {}", e))?;
     let encrypted = crate::utils::dpapi::dpapi_encrypt(&json)
         .map_err(|e| format!("Failed to encrypt gdrive token: {}", e))?;
-    fs::write(&path, encrypted)
-        .map_err(|e| format!("Failed to write gdrive token: {}", e))?;
+    // Atomic write so a crash mid-write can't corrupt the stored token (which
+    // would force a reconnect) — see utils::fs::atomic_write.
+    crate::utils::fs::atomic_write(&path, encrypted.as_bytes())?;
     Ok(())
 }
 
@@ -224,6 +236,13 @@ fn ensure_loaded() {
     }
 }
 
+/// Serializes token refreshes so two concurrent uploads that both find the token
+/// expired don't each POST to Google's token endpoint (and race to overwrite the
+/// stored token). The loser of the race sees the fresh token via the re-check
+/// after acquiring the gate. A tokio (async) mutex is required because the guard
+/// is held across the `.await` on the refresh request.
+static REFRESH_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Get a valid access token, refreshing if expired
 pub async fn get_valid_token() -> Result<String, String> {
     ensure_loaded();
@@ -231,55 +250,66 @@ pub async fn get_valid_token() -> Result<String, String> {
     let token = GDRIVE_TOKEN.lock().clone()
         .ok_or("Not authorized. Please connect to Google Drive.")?;
 
-    // If token expires in less than 60 seconds, refresh it
-    if now_secs() + 60 >= token.expires_at {
-        let client = http_client();
-        let params = [
-            ("client_id", CLIENT_ID),
-            ("client_secret", CLIENT_SECRET),
-            ("refresh_token", token.refresh_token.as_str()),
-            ("grant_type", "refresh_token"),
-        ];
-
-        let resp = client
-            .post("https://oauth2.googleapis.com/token")
-            .form(&params)
-            .send()
-            .await
-            .map_err(|e| format!("Token refresh failed: {}", e))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            if status.is_client_error() {
-                *GDRIVE_TOKEN.lock() = None;
-                delete_token_from_disk();
-                return Err("Google Drive access has been revoked or expired. \
-                    Please reconnect in Settings > Storage (Connect to Google Drive)."
-                    .to_string());
-            }
-            return Err(format!("Token refresh failed ({}): {}", status, body));
-        }
-
-        let resp = resp
-            .json::<GoogleTokenResponse>()
-            .await
-            .map_err(|e| format!("Failed to parse refresh response: {}", e))?;
-
-        let refreshed = SavedToken {
-            access_token: resp.access_token.clone(),
-            // Google doesn't return refresh_token on refresh, keep the old one
-            refresh_token: resp.refresh_token.unwrap_or(token.refresh_token),
-            expires_at: now_secs() + resp.expires_in,
-        };
-
-        save_token_to_disk(&refreshed)?;
-        *GDRIVE_TOKEN.lock() = Some(refreshed);
-
-        Ok(resp.access_token)
-    } else {
-        Ok(token.access_token)
+    // Fast path: still valid with >60s of headroom.
+    if now_secs() + 60 < token.expires_at {
+        return Ok(token.access_token);
     }
+
+    // Needs refresh — take the single-flight gate so parallel uploads don't each
+    // hit the token endpoint.
+    let _gate = REFRESH_GATE.lock().await;
+
+    // Re-check under the gate: another task may have refreshed while we waited.
+    let token = GDRIVE_TOKEN.lock().clone()
+        .ok_or("Not authorized. Please connect to Google Drive.")?;
+    if now_secs() + 60 < token.expires_at {
+        return Ok(token.access_token);
+    }
+
+    let client = http_client();
+    let params = [
+        ("client_id", CLIENT_ID),
+        ("client_secret", CLIENT_SECRET),
+        ("refresh_token", token.refresh_token.as_str()),
+        ("grant_type", "refresh_token"),
+    ];
+
+    let resp = client
+        .post("https://oauth2.googleapis.com/token")
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| format!("Token refresh failed: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        if status.is_client_error() {
+            *GDRIVE_TOKEN.lock() = None;
+            delete_token_from_disk();
+            return Err("Google Drive access has been revoked or expired. \
+                Please reconnect in Settings > Storage (Connect to Google Drive)."
+                .to_string());
+        }
+        return Err(format!("Token refresh failed ({}): {}", status, body));
+    }
+
+    let resp = resp
+        .json::<GoogleTokenResponse>()
+        .await
+        .map_err(|e| format!("Failed to parse refresh response: {}", e))?;
+
+    let refreshed = SavedToken {
+        access_token: resp.access_token.clone(),
+        // Google doesn't return refresh_token on refresh, keep the old one
+        refresh_token: resp.refresh_token.unwrap_or(token.refresh_token),
+        expires_at: now_secs() + resp.expires_in,
+    };
+
+    save_token_to_disk(&refreshed)?;
+    *GDRIVE_TOKEN.lock() = Some(refreshed);
+
+    Ok(resp.access_token)
 }
 
 #[tauri::command]
@@ -601,7 +631,19 @@ pub async fn gdrive_upload_pooled(
         .unwrap_or("image.jpg")
         .to_string();
 
-    // Try claiming a pre-allocated placeholder
+    // Try claiming a pre-allocated placeholder.
+    //
+    // BY DESIGN, not a bug: claiming a placeholder returns instantly with a real,
+    // already-public share URL while the actual image bytes are written by the
+    // background PATCH below. This is the whole point of the pool — the link is on
+    // the clipboard so fast that a human cannot realistically open it before the
+    // PATCH lands. In the rare case someone does hit it during that sub-second
+    // window, they briefly see the blank placeholder and a page refresh shows the
+    // image; and if the PATCH can never complete, the fallback re-uploads and
+    // pushes a corrected link to the window (below). So the worst case is a
+    // one-refresh delay, never a permanently-broken link — an accepted trade-off
+    // for instant sharing. Do NOT "fix" this by awaiting the PATCH before
+    // returning; that would defeat the instant-link feature.
     if let Some((file_id, url)) = super::gdrive_pool::claim_placeholder(&pool.inner) {
         // Spawn background PATCH to replace placeholder content with real image.
         // Retry a few times; if it can never be filled, fall back to a direct

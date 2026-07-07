@@ -115,17 +115,21 @@ fn validate_settings(s: &mut AppSettings) {
 /// falls back to the built-in `cta_`, so generation, validation and cleanup all
 /// agree on which files belong to ClipToAll.
 fn sanitize_image_prefix(raw: &str) -> String {
-    const ILLEGAL: &[char] = &['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
+    // Whitelist: ASCII letters, digits and underscore only. This keeps the prefix
+    // a plainly filename-legal token that can never carry a path separator, `..`,
+    // whitespace, or a Windows-reserved character (< > : " / \ | ? *), so it can't
+    // steer the temp-screenshot write outside %TEMP% or produce an unsavable name.
+    // Enforce the minimum length the cleanup logic requires; anything shorter (or
+    // empty) falls back to the built-in `cta_`.
     let cleaned: String = raw
         .chars()
-        .filter(|c| !c.is_control() && !ILLEGAL.contains(c))
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
         .take(64)
         .collect();
-    let cleaned = cleaned.trim();
     if cleaned.chars().count() < crate::commands::capture::MIN_CUSTOM_PREFIX_LEN {
         "cta_".to_string()
     } else {
-        cleaned.to_string()
+        cleaned
     }
 }
 
@@ -226,6 +230,13 @@ pub fn load_settings_sync() -> AppSettings {
 
 #[tauri::command]
 pub fn save_results_window_size(width: f64, height: f64) -> Result<(), String> {
+    // INTENTIONALLY NOT gated with require_main_window (unlike save_settings and
+    // the plugin commands): this legitimately fires from the Results window itself
+    // as the user resizes it, so gating it to "main" would break the feature. It
+    // is safe to leave open — it carries no secrets, only clamps and persists two
+    // window dimensions (validate_settings bounds them), and cannot redirect
+    // uploads, run code, or reveal stored credentials. Widening it would be the
+    // regression here, not leaving it as-is.
     // Hold the write lock across the whole read-modify-write so a concurrent
     // Settings save can't be clobbered: without this, we could read a stale
     // snapshot (e.g. the theme the user just changed) and write it back over the
@@ -315,14 +326,9 @@ fn save_settings_to_disk_locked(settings: AppSettings) -> Result<(), String> {
     let content = serde_json::to_string_pretty(&to_save)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
 
-    // Atomic write: write to a temp file then rename over the target, so a crash
-    // mid-write can't leave a truncated settings.json (→ silent reset to defaults).
-    let mut tmp = path.clone();
-    tmp.set_file_name("settings.json.tmp");
-    fs::write(&tmp, &content)
-        .map_err(|e| format!("Failed to write settings: {}", e))?;
-    fs::rename(&tmp, &path)
-        .map_err(|e| format!("Failed to commit settings: {}", e))?;
+    // Atomic write (temp file + rename) so a crash mid-write can't leave a
+    // truncated settings.json (→ silent reset to defaults).
+    crate::utils::fs::atomic_write(&path, &content)?;
 
     // Refresh the cache with the plaintext version.
     *SETTINGS_CACHE.write() = Some(settings);
@@ -405,11 +411,20 @@ mod tests {
     fn validate_strips_illegal_prefix_chars() {
         let mut s = AppSettings { image_prefix: r#"..\ev:il*?"#.into(), ..Default::default() };
         validate_settings(&mut s);
-        // All reserved/traversal characters removed; what survives ("..evil") still
-        // meets the minimum length, so it is kept — but it can no longer escape %TEMP%.
-        assert_eq!(s.image_prefix, "..evil");
+        // Whitelist keeps only [A-Za-z0-9_]: dots, backslash, colon and the rest
+        // are dropped, leaving "evil" — which still meets the minimum length and
+        // can no longer escape %TEMP%.
+        assert_eq!(s.image_prefix, "evil");
         assert!(!s.image_prefix.contains('\\'));
         assert!(!s.image_prefix.contains(':'));
+        assert!(!s.image_prefix.contains('.'));
+    }
+
+    #[test]
+    fn validate_keeps_underscore_and_digits_in_prefix() {
+        let mut s = AppSettings { image_prefix: "shot_2_".into(), ..Default::default() };
+        validate_settings(&mut s);
+        assert_eq!(s.image_prefix, "shot_2_");
     }
 
     #[test]

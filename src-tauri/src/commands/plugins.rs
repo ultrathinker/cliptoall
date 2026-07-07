@@ -391,8 +391,9 @@ fn save_plugin_configs(configs: Vec<PluginConfig>) -> Result<(), String> {
     let path = plugin_config_path();
     let json = serde_json::to_string_pretty(&encrypted_configs)
         .map_err(|e| format!("serialize: {}", e))?;
-    std::fs::write(&path, json)
-        .map_err(|e| format!("write: {}", e))?;
+    // Atomic write so a crash mid-write can't corrupt plugins.json (which would
+    // drop the user's plugin config, incl. the encryption password binding).
+    crate::utils::fs::atomic_write(&path, json.as_bytes())?;
     Ok(())
 }
 

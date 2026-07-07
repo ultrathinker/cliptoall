@@ -106,7 +106,11 @@ export async function startUpload(opts: { copyLink?: boolean } = {}): Promise<vo
 
     session.url = url;
     session.status = 'done';
-    session.stale = false;
+    // If the user edited the image WHILE this upload was in flight, the link now
+    // points to the pre-edit version → mark it stale. Comparing the path we
+    // uploaded against the current image covers the edit-during-uploading race
+    // that applyEditedPath (which only fires when status==='done') would miss.
+    session.stale = path !== currentImagePath();
 
     // Copy the link in normal (link) mode, or when the user explicitly asked.
     if (!session.copyImageMode || opts.copyLink) {
@@ -129,7 +133,9 @@ export async function updateUrl(callId: number, url: string): Promise<void> {
   if (callId !== session.callId) return;
   session.url = url;
   session.status = 'done';
-  session.stale = false;
+  // Do NOT clear `stale` here: this only swaps in a corrected link for the SAME
+  // uploaded image. If the user edited since (so the image is stale), the
+  // corrected link is still for the old image and must stay flagged stale.
   if (!session.copyImageMode) {
     session.clipboardWarning = !(await copyToClipboardSafe(url));
   }

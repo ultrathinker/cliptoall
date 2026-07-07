@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 date-based patch versions.
 
+## [5.1.20]
+
+### Security
+
+- Actually close the Results/Editor event-broadcast vector: the previous release
+  dropped the explicit `core:event:allow-emit` but left `core:default`, which
+  transitively re-granted emit. The capability now lists `core:default`'s members
+  explicitly, minus `core:event:default`, so those overlays can only listen — a
+  compromised one can no longer emit a spoofed `settings-changed`.
+
+### Robustness
+
+- Atomic writes (temp file + rename) for `settings.json`, `plugins.json`, and
+  `gdrive_token.json`, so a crash/power loss mid-write can't corrupt them.
+- Single-flight Google token refresh: concurrent uploads that all find the token
+  expired no longer each hit the token endpoint and race to overwrite it.
+- OAuth: a cancelled/denied authorization (`?error=`) now fails fast instead of
+  hanging until the 2-minute timeout.
+- Editing the image while an upload is in flight now correctly marks the link
+  stale (previously only handled once the upload had finished).
+
+### Changed
+
+- Image prefix is restricted to `[A-Za-z0-9_]` (else it falls back to `cta_`).
+- Screenshot path validation recognizes files by their timestamp signature
+  rather than the current prefix, so changing `image_prefix` no longer breaks a
+  path an already-open window is holding.
+
 ## [5.1.19]
 
 ### Packaging
@@ -130,6 +158,7 @@ First open-source release of the Tauri 2 rewrite of ClipToAll.
 - Restrictive Content-Security-Policy and per-window capability scoping.
 - `read_image_base64` restricted to the temp screenshot directory; plugin execution constrained to the plugins directory.
 
+[5.1.20]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.20
 [5.1.19]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.19
 [5.1.18]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.18
 [5.1.17]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.17
