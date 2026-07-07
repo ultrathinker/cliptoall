@@ -40,7 +40,7 @@ export const defaultSettings: AppSettings = {
   googleDriveFolder: 'public-images',
   downscaleForDpi: true,
   outputMode: 'resize',
-  theme: 'classic',
+  theme: 'crimson',
   resultsWidth: 850,
   resultsHeight: 190,
   skipUploadInCopyMode: true,

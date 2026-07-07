@@ -1,7 +1,10 @@
 import { themes } from '../themes';
 
 export function applyTheme(themeKey: string) {
-  const theme = themes[themeKey] || themes.classic;
+  // Fall back to the app-wide default theme (matches the Rust AppSettings
+  // default) when an unknown key is passed, so first-run/invalid values render
+  // the same theme the backend would persist.
+  const theme = themes[themeKey] || themes.crimson;
 
   const root = document.documentElement;
   root.style.setProperty('--bg-base', theme.bgBase);

@@ -39,10 +39,10 @@
     try {
       const loadedSettings = await loadSettings();
       settings.set({ ...defaultSettings, ...loadedSettings });
-      applyTheme(loadedSettings.theme || 'classic');
+      applyTheme(loadedSettings.theme || 'crimson');
     } catch (e) {
       console.error('Failed to load settings:', e);
-      applyTheme('classic');
+      applyTheme('crimson');
     }
 
     // Live-update settings/theme in every open window when saved elsewhere.
@@ -56,7 +56,7 @@
         amazonAccessKeyId: s.amazonAccessKeyId || cur.amazonAccessKeyId,
         amazonSecretAccessKey: s.amazonSecretAccessKey || cur.amazonSecretAccessKey,
       }));
-      applyTheme(s.theme || 'classic');
+      applyTheme(s.theme || 'crimson');
     });
 
     // GDrive pool fell back to a direct upload — adopt the corrected link

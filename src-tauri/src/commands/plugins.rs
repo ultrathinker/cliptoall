@@ -39,9 +39,11 @@ pub fn discover_plugins() -> Vec<DiscoveredPlugin> {
 /// Save plugin configurations and restart plugins accordingly.
 #[tauri::command]
 pub fn apply_plugin_config(
+    window: tauri::Window,
     state: State<PluginManagerState>,
     configs: Vec<PluginConfig>,
 ) -> Result<(), String> {
+    crate::commands::require_main_window(&window)?;
     for cfg in &configs {
         ensure_in_plugins_dir(std::path::Path::new(&cfg.path))
             .map_err(|e| format!("Invalid plugin path '{}': {}", cfg.path, e))?;
@@ -101,7 +103,8 @@ pub fn load_plugin_configs(window: tauri::Window) -> Vec<PluginConfig> {
 
 /// Open a script in a PowerShell terminal for interactive debugging.
 #[tauri::command]
-pub fn run_script_in_terminal(path: String) -> Result<(), String> {
+pub fn run_script_in_terminal(window: tauri::Window, path: String) -> Result<(), String> {
+    crate::commands::require_main_window(&window)?;
     let p = std::path::Path::new(&path);
     ensure_in_plugins_dir(p)?;
 
@@ -145,7 +148,8 @@ fn output_with_timeout(mut cmd: std::process::Command, secs: u64) -> Result<std:
 
 /// Run a script on demand and return its stdout.
 #[tauri::command]
-pub fn run_script(path: String) -> Result<String, String> {
+pub fn run_script(window: tauri::Window, path: String) -> Result<String, String> {
+    crate::commands::require_main_window(&window)?;
     // Only scripts inside the plugins/ dir may be executed (BUGS#11).
     ensure_in_plugins_dir(std::path::Path::new(&path))?;
 
@@ -240,7 +244,8 @@ pub(crate) fn ensure_in_plugins_dir(path: &std::path::Path) -> Result<(), String
 /// `overwrite` is true when editing an existing script; for a brand-new script
 /// a name collision is rejected instead of silently clobbering (BUGS#11).
 #[tauri::command]
-pub fn save_script(name: String, language: String, content: String, overwrite: Option<bool>) -> Result<String, String> {
+pub fn save_script(window: tauri::Window, name: String, language: String, content: String, overwrite: Option<bool>) -> Result<String, String> {
+    crate::commands::require_main_window(&window)?;
     let dir = PluginManager::plugins_dir()
         .ok_or("Cannot determine plugins directory")?;
 
@@ -271,7 +276,8 @@ pub fn save_script(name: String, language: String, content: String, overwrite: O
 
 /// Delete a script file (must be inside plugins/ directory).
 #[tauri::command]
-pub fn delete_script(path: String) -> Result<(), String> {
+pub fn delete_script(window: tauri::Window, path: String) -> Result<(), String> {
+    crate::commands::require_main_window(&window)?;
     let p = std::path::Path::new(&path);
     let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
     if ext != "py" && ext != "cs" && ext != "ps1" {
@@ -290,7 +296,8 @@ pub fn check_runtime(language: String) -> Result<String, String> {
 
 /// Read a script file's content (must be inside plugins/ directory).
 #[tauri::command]
-pub fn read_script(path: String) -> Result<String, String> {
+pub fn read_script(window: tauri::Window, path: String) -> Result<String, String> {
+    crate::commands::require_main_window(&window)?;
     let p = std::path::Path::new(&path);
     ensure_in_plugins_dir(p)?;
     std::fs::read_to_string(&path)
@@ -299,7 +306,8 @@ pub fn read_script(path: String) -> Result<String, String> {
 
 /// Pre-compile a C# script (triggers dotnet build cache).
 #[tauri::command]
-pub fn precompile_script(path: String) -> Result<String, String> {
+pub fn precompile_script(window: tauri::Window, path: String) -> Result<String, String> {
+    crate::commands::require_main_window(&window)?;
     ensure_in_plugins_dir(std::path::Path::new(&path))?;
 
     let mut cmd = std::process::Command::new("dotnet");

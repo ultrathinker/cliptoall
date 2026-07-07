@@ -67,6 +67,32 @@ fn default_jpeg_quality() -> u8 { 85 }
 /// Empty sentinel: an absent output_mode is migrated from downscale_for_dpi on load.
 fn default_output_mode() -> String { String::new() }
 
+/// Clamp numeric fields to sane ranges and snap unknown enum strings back to
+/// their default. Runs on every persist so a malformed IPC payload (or a
+/// tampered settings.json round-tripped through save) can't store absurd window
+/// sizes, an out-of-range JPEG quality, or an unrecognized theme/mode (#3).
+fn validate_settings(s: &mut AppSettings) {
+    // Window size: keep within something a real monitor could show. NaN/inf
+    // collapse to the default via the finite check.
+    s.results_width = if s.results_width.is_finite() { s.results_width.clamp(200.0, 20000.0) } else { default_results_width() };
+    s.results_height = if s.results_height.is_finite() { s.results_height.clamp(100.0, 20000.0) } else { default_results_height() };
+    // JPEG quality is 1..=100 (0 or >100 are meaningless to the encoder).
+    s.jpeg_quality = s.jpeg_quality.clamp(1, 100);
+    // Enum whitelists — must match the frontend option sets exactly.
+    if !["classic", "mac", "crimson", "ocean", "forest"].contains(&s.theme.as_str()) {
+        s.theme = "crimson".to_string();
+    }
+    if !["gdrive", "s3"].contains(&s.storage_type.as_str()) {
+        s.storage_type = "gdrive".to_string();
+    }
+    if !["off", "resize", "exif"].contains(&s.output_mode.as_str()) {
+        s.output_mode = "resize".to_string();
+    }
+    if !["image", "link"].contains(&s.default_mode.as_str()) {
+        s.default_mode = "image".to_string();
+    }
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -164,10 +190,16 @@ pub fn load_settings_sync() -> AppSettings {
 
 #[tauri::command]
 pub fn save_results_window_size(width: f64, height: f64) -> Result<(), String> {
+    // Hold the write lock across the whole read-modify-write so a concurrent
+    // Settings save can't be clobbered: without this, we could read a stale
+    // snapshot (e.g. the theme the user just changed) and write it back over the
+    // fresh value. Reading under the lock guarantees we start from the latest
+    // persisted state (3.12).
+    let _guard = SETTINGS_WRITE_LOCK.lock();
     let mut settings = load_settings_sync();
     settings.results_width = width;
     settings.results_height = height;
-    save_settings_to_disk(settings)
+    save_settings_to_disk_locked(settings)
 }
 
 /// Decrypt DPAPI-protected fields after loading from disk.
@@ -180,7 +212,11 @@ fn decrypt_sensitive_fields(settings: &mut AppSettings) {
 /// Tauri command: persist settings AND notify all open windows so they can
 /// live-update theme/behaviour without a restart (BUGS#11).
 #[tauri::command]
-pub fn save_settings(app: AppHandle, settings: AppSettings) -> Result<(), String> {
+pub fn save_settings(app: AppHandle, window: tauri::Window, settings: AppSettings) -> Result<(), String> {
+    // Only the Settings UI may persist a full settings object. A non-main
+    // WebView could otherwise redirect uploads (swap S3 creds/bucket) or flip
+    // behaviour flags over the IPC boundary (#main / command-gating).
+    crate::commands::require_main_window(&window)?;
     save_settings_to_disk(settings.clone())?;
     // Broadcast to every window for live theme/behaviour updates — but strip
     // secrets: they must not travel the event bus to all WebViews (3.8). Each
@@ -198,13 +234,28 @@ pub fn save_settings_to_disk(settings: AppSettings) -> Result<(), String> {
     // Serialize writers so a Results-resize save and a Settings save can't
     // interleave and clobber each other (3.12).
     let _guard = SETTINGS_WRITE_LOCK.lock();
+    save_settings_to_disk_locked(settings)
+}
 
+/// Persist settings assuming `SETTINGS_WRITE_LOCK` is already held by the caller.
+/// Split out from `save_settings_to_disk` so `save_results_window_size` can run
+/// its whole read-modify-write under a single lock acquisition (the lock is not
+/// reentrant, so it must not be taken twice on one thread).
+fn save_settings_to_disk_locked(settings: AppSettings) -> Result<(), String> {
     // Normalize + keep the legacy downscale_for_dpi boolean in sync with the
     // canonical output_mode (back-compat if an older build ever reads the file).
     let mut settings = settings;
     if settings.output_mode.trim().is_empty() {
         settings.output_mode = if settings.downscale_for_dpi { "resize" } else { "off" }.to_string();
     }
+
+    // A command is a trust boundary: the UI only ever sends valid values, but a
+    // malformed IPC payload must not be able to poison settings.json. Clamp
+    // numbers to sane ranges and snap unknown enums back to their default (#3).
+    validate_settings(&mut settings);
+
+    // Keep the legacy downscale_for_dpi boolean in sync with the now-validated
+    // canonical output_mode (back-compat if an older build ever reads the file).
     settings.downscale_for_dpi = settings.output_mode == "resize";
 
     // Update cached atomics immediately
@@ -240,4 +291,77 @@ pub fn save_settings_to_disk(settings: AppSettings) -> Result<(), String> {
     // Refresh the cache with the plaintext version.
     *SETTINGS_CACHE.write() = Some(settings);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_clamps_numeric_ranges() {
+        let mut s = AppSettings {
+            results_width: 5.0,       // below min
+            results_height: 99999.0,  // above max
+            jpeg_quality: 0,          // below min
+            ..Default::default()
+        };
+        validate_settings(&mut s);
+        assert_eq!(s.results_width, 200.0);
+        assert_eq!(s.results_height, 20000.0);
+        assert_eq!(s.jpeg_quality, 1);
+
+        let mut s2 = AppSettings { jpeg_quality: 200, ..Default::default() }; // above max
+        validate_settings(&mut s2);
+        assert_eq!(s2.jpeg_quality, 100);
+    }
+
+    #[test]
+    fn validate_non_finite_window_size_falls_back_to_default() {
+        let mut s = AppSettings {
+            results_width: f64::NAN,
+            results_height: f64::INFINITY,
+            ..Default::default()
+        };
+        validate_settings(&mut s);
+        assert_eq!(s.results_width, default_results_width());
+        assert_eq!(s.results_height, default_results_height());
+    }
+
+    #[test]
+    fn validate_snaps_unknown_enums_to_defaults() {
+        let mut s = AppSettings {
+            theme: "hot-pink".into(),
+            storage_type: "dropbox".into(),
+            output_mode: "supersample".into(),
+            default_mode: "carrier-pigeon".into(),
+            ..Default::default()
+        };
+        validate_settings(&mut s);
+        assert_eq!(s.theme, "crimson");
+        assert_eq!(s.storage_type, "gdrive");
+        assert_eq!(s.output_mode, "resize");
+        assert_eq!(s.default_mode, "image");
+    }
+
+    #[test]
+    fn validate_preserves_valid_values() {
+        let mut s = AppSettings {
+            theme: "ocean".into(),
+            storage_type: "s3".into(),
+            output_mode: "exif".into(),
+            default_mode: "link".into(),
+            jpeg_quality: 72,
+            results_width: 1024.0,
+            results_height: 640.0,
+            ..Default::default()
+        };
+        validate_settings(&mut s);
+        assert_eq!(s.theme, "ocean");
+        assert_eq!(s.storage_type, "s3");
+        assert_eq!(s.output_mode, "exif");
+        assert_eq!(s.default_mode, "link");
+        assert_eq!(s.jpeg_quality, 72);
+        assert_eq!(s.results_width, 1024.0);
+        assert_eq!(s.results_height, 640.0);
+    }
 }

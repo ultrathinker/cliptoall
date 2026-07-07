@@ -24,6 +24,9 @@
 
   let pluginsLoading = $state(false);
   let bindingTarget = $state<{ path: string; funcId: string } | null>(null);
+  // Transient hint shown while listening when the user presses a key the
+  // overlay can't map (only A–Z / 0–9 are valid shortcuts). Cleared on start.
+  let bindingHint = $state('');
   let instructionTarget = $state<DiscoveredPlugin | null>(null);
   let settingsTarget = $state<{ plugin: DiscoveredPlugin; config: PluginConfig } | null>(null);
   let settingsEditValue = $state('');
@@ -147,6 +150,7 @@
 
   function startKeyBinding(path: string, funcId: string) {
     bindingTarget = { path, funcId };
+    bindingHint = '';
   }
 
   function handleBindingKeydown(e: KeyboardEvent) {
@@ -156,6 +160,7 @@
 
     if (e.key === 'Escape') {
       bindingTarget = null;
+      bindingHint = '';
       return;
     }
 
@@ -163,6 +168,17 @@
     if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
 
     const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+
+    // The overlay maps plugin shortcuts by single virtual-key code and only
+    // knows A–Z / 0–9 (see key_string_to_vk in overlay.rs). Binding anything
+    // else (F-keys, arrows, punctuation) would be saved but silently never
+    // fire. Reject those here and keep listening + surface a hint, instead of
+    // storing a dead binding.
+    if (!/^[A-Z0-9]$/.test(key)) {
+      bindingHint = 'Only A–Z or 0–9 can be used as a shortcut';
+      return;
+    }
+    bindingHint = '';
 
     const { path, funcId } = bindingTarget;
 
@@ -470,18 +486,26 @@
               <div class="func-row">
                 <span class="func-label">{fn.label}</span>
                 {#if enabled}
-                  <button
-                    class="key-btn"
-                    class:listening={bindingTarget?.path === plugin.path && bindingTarget?.funcId === fn.id}
-                    class:setup={keyLabel === 'SETUP'}
-                    onclick={() => startKeyBinding(plugin.path, fn.id)}
-                  >
-                    {#if bindingTarget?.path === plugin.path && bindingTarget?.funcId === fn.id}
-                      ...
-                    {:else}
-                      {keyLabel}
+                  {@const listening = bindingTarget?.path === plugin.path && bindingTarget?.funcId === fn.id}
+                  <span class="key-cell">
+                    {#if listening}
+                      <span class="binding-hint" class:binding-hint-warn={bindingHint}>
+                        {bindingHint || 'Press A–Z or 0–9'}
+                      </span>
                     {/if}
-                  </button>
+                    <button
+                      class="key-btn"
+                      class:listening
+                      class:setup={keyLabel === 'SETUP'}
+                      onclick={() => startKeyBinding(plugin.path, fn.id)}
+                    >
+                      {#if listening}
+                        ...
+                      {:else}
+                        {keyLabel}
+                      {/if}
+                    </button>
+                  </span>
                 {:else}
                   <span class="key-btn disabled">{keyLabel}</span>
                 {/if}

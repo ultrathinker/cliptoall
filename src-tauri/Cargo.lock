@@ -1077,7 +1077,7 @@ dependencies = [
 
 [[package]]
 name = "cliptoall-tauri2"
-version = "5.1.16"
+version = "5.1.17"
 dependencies = [
  "aws-config",
  "aws-sdk-s3",

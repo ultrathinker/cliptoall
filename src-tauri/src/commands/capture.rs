@@ -451,6 +451,12 @@ pub fn save_image_to_file(source_path: String, output_scale: f32) -> Result<Opti
     use windows::core::PCWSTR;
     use windows::Win32::UI::Controls::Dialogs::*;
 
+    // Only ever re-encode a genuine ClipToAll temp screenshot. Every other
+    // path-taking command validates its input this way; save_image_to_file was
+    // the lone exception, letting a caller point it at an arbitrary file to be
+    // read and rewritten to the user-chosen destination (Codex finding #1).
+    ensure_temp_screenshot_path(&source_path)?;
+
     let src = Path::new(&source_path);
     let default_name = src.file_name()
         .map(|n| n.to_string_lossy().to_string())

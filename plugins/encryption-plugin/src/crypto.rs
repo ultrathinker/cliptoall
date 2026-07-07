@@ -1,20 +1,24 @@
 //! Clipboard text encryption for the ClipToAll encryption plugin.
 //!
-//! Two on-the-wire schemes coexist:
+//! Two schemes coexist and — deliberately — NEITHER carries a format marker, so
+//! a ciphertext is just base64 with nothing that identifies the tool or scheme.
 //!
-//! * **Strong v2** (DEFAULT, marker-prefixed `CTA2:`): per-message random salt,
-//!   PBKDF2-HMAC-SHA256 key derivation, random 96-bit nonce, AES-256-GCM
-//!   (authenticated). Envelope: `CTA2:` + base64(salt(16) || nonce(12) || ct+tag).
+//! * **Strong v2** (DEFAULT): per-message random salt, PBKDF2-HMAC-SHA256 key
+//!   derivation, random 96-bit nonce, AES-256-GCM (authenticated). Envelope:
+//!   base64(salt(16) || nonce(12) || ct + 16-byte GCM tag).
 //!
-//! * **Legacy** (OPT-IN, unmarked): key = SHA-256(password), fixed IV =
-//!   SHA-256("ClipToAll")[..16], AES-256-CBC + PKCS7, base64. An interop mode
-//!   for the old .NET ClipToAll and for previously-encrypted values; its output
-//!   is decryptable by the .NET version. Byte-for-byte compatible with anything
-//!   already encrypted that way.
+//! * **Legacy** (OPT-IN): key = SHA-256(password), fixed IV =
+//!   SHA-256("ClipToAll")[..16], AES-256-CBC + PKCS7, base64. Interop mode for
+//!   the old .NET ClipToAll and previously-encrypted values; byte-for-byte
+//!   compatible and decryptable by the .NET version.
 //!
-//! Decryption auto-detects the scheme from the `CTA2:` marker, so legacy values
-//! keep working forever regardless of which scheme is selected for NEW
-//! ciphertext.
+//! Decryption needs no marker because AES-GCM is *authenticated*: the strong
+//! scheme is tried first and its tag verification only succeeds on genuine
+//! strong ciphertext (a legacy or foreign blob fails with ~2^-128 odds of a
+//! false accept), so on failure we fall back to the unauthenticated legacy
+//! scheme. The order is not cosmetic — the authenticated scheme MUST be tried
+//! first; trying legacy (CBC, no auth) first could occasionally decrypt a real
+//! strong ciphertext into garbage.
 
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use aes_gcm::aead::{Aead, KeyInit};
@@ -24,11 +28,6 @@ use sha2::{Digest, Sha256};
 
 type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
-
-/// ASCII marker that prefixes strong (v2) ciphertext. Standard base64 never
-/// contains ':', so this marker unambiguously distinguishes a v2 envelope from
-/// a legacy (unmarked) base64 blob.
-pub const MARKER_V2: &str = "CTA2:";
 
 /// PBKDF2 iteration count — 600k HMAC-SHA256 rounds (OWASP 2023 guidance).
 const PBKDF2_ITERATIONS: u32 = 600_000;
@@ -141,16 +140,12 @@ fn encrypt_v2(plaintext: &str, password: &str) -> Result<String, String> {
     envelope.extend_from_slice(&nonce_bytes);
     envelope.extend_from_slice(&ciphertext);
 
-    Ok(format!("{}{}", MARKER_V2, BASE64.encode(&envelope)))
+    Ok(BASE64.encode(&envelope))
 }
 
-fn decrypt_v2(marked: &str, password: &str) -> Result<String, String> {
-    let b64 = marked
-        .strip_prefix(MARKER_V2)
-        .ok_or_else(|| "Not a v2 ciphertext".to_string())?;
-
+fn decrypt_v2(input: &str, password: &str) -> Result<String, String> {
     let envelope = BASE64
-        .decode(b64.trim())
+        .decode(input.trim())
         .map_err(|e| format!("Invalid base64: {}", e))?;
 
     if envelope.len() < SALT_LEN + NONCE_LEN {
@@ -182,14 +177,13 @@ pub fn encrypt_text(plaintext: &str, password: &str, scheme: Scheme) -> Result<S
     }
 }
 
-/// Decrypt `input`, auto-detecting the scheme from the `CTA2:` marker so both
-/// legacy and v2 ciphertexts decrypt regardless of the configured scheme.
+/// Decrypt `input`, auto-detecting the scheme with no format marker. AES-GCM is
+/// authenticated, so the strong scheme is tried first: its tag only verifies for
+/// genuine strong ciphertext, and only on failure do we fall back to the legacy
+/// (unauthenticated) scheme. The authenticated scheme MUST be tried first —
+/// reversing the order could decrypt a real strong ciphertext into garbage.
 pub fn decrypt_text(input: &str, password: &str) -> Result<String, String> {
-    if input.starts_with(MARKER_V2) {
-        decrypt_v2(input, password)
-    } else {
-        decrypt_legacy(input, password)
-    }
+    decrypt_v2(input, password).or_else(|_| decrypt_legacy(input, password))
 }
 
 #[cfg(test)]
@@ -199,7 +193,9 @@ mod tests {
     #[test]
     fn legacy_roundtrip_ascii() {
         let enc = encrypt_text("hello world", "pass", Scheme::Legacy).unwrap();
-        assert!(!enc.starts_with(MARKER_V2));
+        // The strong (authenticated) attempt must reject a legacy blob so the
+        // markerless decrypt_text falls through to the legacy scheme.
+        assert!(decrypt_v2(&enc, "pass").is_err());
         assert_eq!(decrypt_text(&enc, "pass").unwrap(), "hello world");
     }
 
@@ -225,8 +221,18 @@ mod tests {
     fn v2_roundtrip() {
         let s = "top secret Привет 🌍";
         let enc = encrypt_text(s, "correct horse", Scheme::Strong).unwrap();
-        assert!(enc.starts_with(MARKER_V2));
+        // No marker: the ciphertext is plain base64, yet the strong path decrypts it.
+        assert!(decrypt_v2(&enc, "correct horse").is_ok());
         assert_eq!(decrypt_text(&enc, "correct horse").unwrap(), s);
+    }
+
+    #[test]
+    fn decrypt_text_falls_back_to_legacy() {
+        // With no format marker, a legacy ciphertext is found only via the
+        // strong-first / legacy-fallback order in decrypt_text.
+        let enc = encrypt_text("legacy secret", "pw", Scheme::Legacy).unwrap();
+        assert!(decrypt_v2(&enc, "pw").is_err());
+        assert_eq!(decrypt_text(&enc, "pw").unwrap(), "legacy secret");
     }
 
     #[test]
@@ -243,13 +249,17 @@ mod tests {
         let last = chars.len() - 1;
         chars[last] = if chars[last] == 'A' { 'B' } else { 'A' };
         let tampered: String = chars.into_iter().collect();
-        assert!(decrypt_text(&tampered, "pw").is_err());
+        // GCM rejects the tampered blob; the legacy fallback must not turn it
+        // back into the original plaintext either.
+        assert_ne!(decrypt_text(&tampered, "pw").ok().as_deref(), Some("secret"));
     }
 
     #[test]
-    fn v2_wrong_password_fails_cleanly() {
+    fn v2_wrong_password_does_not_return_plaintext() {
         let enc = encrypt_text("secret", "right", Scheme::Strong).unwrap();
-        assert!(decrypt_text(&enc, "wrong").is_err());
+        // Wrong password fails the GCM tag; the legacy fallback must never
+        // recover the original plaintext.
+        assert_ne!(decrypt_text(&enc, "wrong").ok().as_deref(), Some("secret"));
     }
 
     #[test]
@@ -273,6 +283,8 @@ mod tests {
     #[test]
     fn default_setting_encrypts_strong() {
         let enc = encrypt_text("x", "pw", Scheme::from_setting("")).unwrap();
-        assert!(enc.starts_with(MARKER_V2));
+        // The default must produce strong ciphertext, i.e. it decrypts via the
+        // authenticated v2 path (not merely as a legacy blob).
+        assert!(decrypt_v2(&enc, "pw").is_ok());
     }
 }
