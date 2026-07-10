@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 date-based patch versions.
 
+## [5.1.22]
+
+### Diagnostics
+
+- Cap the log file: when `cliptoall.log` reaches 25 MB it rotates to
+  `cliptoall.log.old` (one generation kept), so on-disk log use is bounded at
+  ~50 MB even if "Write to Log File" is left on indefinitely — instead of growing
+  without limit.
+
 ## [5.1.21]
 
 ### Fixed
@@ -181,6 +190,7 @@ First open-source release of the Tauri 2 rewrite of ClipToAll.
 - Restrictive Content-Security-Policy and per-window capability scoping.
 - `read_image_base64` restricted to the temp screenshot directory; plugin execution constrained to the plugins directory.
 
+[5.1.22]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.22
 [5.1.21]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.21
 [5.1.20]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.20
 [5.1.19]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.19

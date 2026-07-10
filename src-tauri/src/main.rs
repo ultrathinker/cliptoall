@@ -54,6 +54,13 @@ fn log_file_path(name: &str) -> std::path::PathBuf {
     dir
 }
 
+/// Max size of the active log before it is rotated (bytes). Rotation keeps one
+/// previous generation (`cliptoall.log.old`), so total on-disk log use is capped
+/// at ~2x this (~50 MB) — even if a user leaves "Write to Log File" on forever.
+const LOG_MAX_BYTES: u64 = 25 * 1024 * 1024;
+/// Serializes log writes so the size check + rotation can't race between threads.
+static LOG_LOCK: Mutex<()> = Mutex::new(());
+
 /// Write a timestamped line to the log file.
 /// Only writes if LOGGING_ON is true (controlled by the "Write to Log File" setting).
 pub fn log(msg: &str) {
@@ -61,7 +68,19 @@ pub fn log(msg: &str) {
         return;
     }
     use std::io::Write;
+    let _guard = LOG_LOCK.lock();
     let log_path = log_file_path("cliptoall.log");
+    // Rotate when the active log passes the cap: drop the old generation and move
+    // the current file to `.old`, then start a fresh one. Keeping one generation
+    // bounds disk use while never truncating history mid-run (the most recent
+    // lines always survive in `.log`, the run before in `.old`).
+    if let Ok(meta) = std::fs::metadata(&log_path) {
+        if meta.len() >= LOG_MAX_BYTES {
+            let old_path = log_file_path("cliptoall.log.old");
+            let _ = std::fs::remove_file(&old_path);
+            let _ = std::fs::rename(&log_path, &old_path);
+        }
+    }
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
         let now = chrono::Local::now();
         let _ = writeln!(f, "[{:02}:{:02}:{:02}.{:03}] {}",
