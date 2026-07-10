@@ -31,6 +31,88 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
     WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Code, Modifiers, Shortcut, ShortcutState};
 
+/// Per-window icon handling on Windows.
+///
+/// WHY THIS EXISTS: Tauri 2 has a bug (tauri#14596) where the runtime window
+/// icon is built from ONLY the first entry of the .ico and that single bitmap is
+/// then stretched to every size — so the caption (16px) and the taskbar (32/48px)
+/// share one poorly-scaled image. We instead set the icons the standard Win32
+/// way: pick the frame that matches the size Windows actually wants for each
+/// context (SM_CXSMICON for the caption, SM_CXICON for the taskbar/Alt-Tab, both
+/// DPI-dependent) out of our multi-size .ico, and assign them separately via
+/// WM_SETICON. One embedded multi-size .ico is enough — no need for many files.
+#[cfg(windows)]
+mod winicon {
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateIconFromResourceEx, GetSystemMetrics, SendMessageW, HICON,
+        LR_DEFAULTCOLOR, SM_CXICON, SM_CXSMICON, WM_SETICON,
+    };
+
+    // The same multi-size icon used for the exe/bundle, embedded so we can build
+    // exact-size HICONs at runtime. Frames are PNG-encoded (CreateIconFromResourceEx
+    // accepts PNG icon images on Vista+).
+    const ICO: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/icons/ClipToAll-all.ico"));
+    const ICON_SMALL: usize = 0;
+    const ICON_BIG: usize = 1;
+
+    struct Frame { size: u32, data: &'static [u8] }
+
+    fn frames() -> Vec<Frame> {
+        let mut out = Vec::new();
+        if ICO.len() < 6 { return out; }
+        let count = u16::from_le_bytes([ICO[4], ICO[5]]) as usize;
+        for i in 0..count {
+            let e = 6 + i * 16;
+            if e + 16 > ICO.len() { break; }
+            let mut w = ICO[e] as u32;
+            if w == 0 { w = 256; }
+            let len = u32::from_le_bytes([ICO[e + 8], ICO[e + 9], ICO[e + 10], ICO[e + 11]]) as usize;
+            let off = u32::from_le_bytes([ICO[e + 12], ICO[e + 13], ICO[e + 14], ICO[e + 15]]) as usize;
+            if off + len <= ICO.len() {
+                out.push(Frame { size: w, data: &ICO[off..off + len] });
+            }
+        }
+        out
+    }
+
+    /// Build an HICON at exactly `target` px, sourced from the frame closest to
+    /// (and at least) that size so the scale-down is minimal and crisp.
+    fn make_icon(target: i32) -> Option<HICON> {
+        let t = target.max(1) as u32;
+        let fs = frames();
+        if fs.is_empty() { return None; }
+        let best = fs.iter().filter(|f| f.size >= t).min_by_key(|f| f.size)
+            .or_else(|| fs.iter().max_by_key(|f| f.size))?;
+        unsafe {
+            CreateIconFromResourceEx(best.data, BOOL(1), 0x0003_0000, target, target, LR_DEFAULTCOLOR).ok()
+        }
+    }
+
+    pub fn apply(hwnd: HWND) {
+        unsafe {
+            let small = GetSystemMetrics(SM_CXSMICON);
+            let big = GetSystemMetrics(SM_CXICON);
+            if let Some(h) = make_icon(small) {
+                let _ = SendMessageW(hwnd, WM_SETICON, WPARAM(ICON_SMALL), LPARAM(h.0 as isize));
+            }
+            if let Some(h) = make_icon(big) {
+                let _ = SendMessageW(hwnd, WM_SETICON, WPARAM(ICON_BIG), LPARAM(h.0 as isize));
+            }
+        }
+    }
+}
+
+/// Set crisp per-context taskbar/caption icons on a window (Windows only).
+#[cfg(windows)]
+fn apply_window_icons(window: &tauri::WebviewWindow) {
+    // tauri's hwnd() returns an HWND from its own (different) windows-crate
+    // version, so rebuild ours from the raw pointer (same underlying *mut c_void).
+    if let Ok(hwnd) = window.hwnd() {
+        winicon::apply(windows::Win32::Foundation::HWND(hwnd.0));
+    }
+}
+
 /// Stores image paths and flags for newly created results windows.
 /// Window fetches its data on mount via get_pending_image command.
 struct PendingImage {
@@ -240,6 +322,9 @@ fn start_capture(app: AppHandle) {
                         .build()
                         {
                             Ok(win) => {
+                                // Crisp per-size caption/taskbar icons (see winicon).
+                                #[cfg(windows)]
+                                apply_window_icons(&win);
                                 // Safety net: if the frontend fails to load / never
                                 // signals ready, show the window anyway after a short
                                 // delay so it can't stay invisible forever.
@@ -541,6 +626,12 @@ fn main() {
                 .build(app)?;
 
             log("setup: tray ready");
+
+            // Give the main window crisp per-size caption/taskbar icons (see winicon).
+            #[cfg(windows)]
+            if let Some(mw) = app.get_webview_window("main") {
+                apply_window_icons(&mw);
+            }
 
             // Register global shortcut from settings (default: Alt+X)
             let shortcut = parse_hotkey(&saved_settings.capture_hotkey)

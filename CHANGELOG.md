@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 date-based patch versions.
 
+## [5.1.24]
+
+### Fixed
+
+- Crisp window icons on Windows. Tauri 2 builds the runtime window icon from only
+  the first entry of the `.ico` and stretches that one bitmap to every size
+  (tauri#14596), which made the taskbar and title-bar icons blurry/pixelated. We
+  now set the icons the standard Win32 way: for each window we pick the frame that
+  matches the size Windows actually wants — `SM_CXSMICON` for the caption,
+  `SM_CXICON` for the taskbar/Alt-Tab (both DPI-dependent) — out of the multi-size
+  icon and assign them separately via `WM_SETICON`. Applied to the main and
+  Results/Editor windows.
+- Regenerated the app icons cleanly (high-quality resampling) and ordered
+  `ClipToAll-all.ico` largest-frame-first.
+
 ## [5.1.23]
 
 ### Fixed
@@ -199,6 +214,7 @@ First open-source release of the Tauri 2 rewrite of ClipToAll.
 - Restrictive Content-Security-Policy and per-window capability scoping.
 - `read_image_base64` restricted to the temp screenshot directory; plugin execution constrained to the plugins directory.
 
+[5.1.24]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.24
 [5.1.23]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.23
 [5.1.22]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.22
 [5.1.21]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.21
