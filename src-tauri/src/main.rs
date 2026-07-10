@@ -232,12 +232,26 @@ fn start_capture(app: AppHandle) {
                         .min_inner_size(620.0, 190.0)
                         .center()
                         .focused(true)
+                        // Created HIDDEN so the user never sees the WebView's blank
+                        // white page before Svelte paints. The frontend calls show()
+                        // once the themed UI is rendered (App.svelte). A fallback
+                        // below reveals it anyway if the frontend never signals.
+                        .visible(false)
                         .build()
                         {
                             Ok(win) => {
-                                let _ = win.show();
-                                let _ = win.set_focus();
-                                log(&format!("  new window '{}' created | +{}ms", label, t0.elapsed().as_millis()));
+                                // Safety net: if the frontend fails to load / never
+                                // signals ready, show the window anyway after a short
+                                // delay so it can't stay invisible forever.
+                                let win_fallback = win.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+                                    if !win_fallback.is_visible().unwrap_or(true) {
+                                        let _ = win_fallback.show();
+                                        let _ = win_fallback.set_focus();
+                                    }
+                                });
+                                log(&format!("  new window '{}' created (hidden; shown when ready) | +{}ms", label, t0.elapsed().as_millis()));
                             }
                             Err(e) => {
                                 log(&format!("  WINDOW CREATE FAILED: {} | +{}ms", e, t0.elapsed().as_millis()));

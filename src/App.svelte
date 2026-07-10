@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
   import { loadSettings, getPendingImage, setupEditorWindow, restoreResultsWindow } from './lib/api';
@@ -105,6 +105,14 @@
           startUpload(); // fire-and-forget; state tracked in the session store
         }
         currentWindow = 'results';
+        // The results window is created HIDDEN (main.rs) to avoid a white flash;
+        // reveal it only after the themed UI has actually painted a frame. tick()
+        // flushes the Svelte render, then two rAFs ensure the browser has painted
+        // before we show the native window.
+        await tick();
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null))));
+        await win.show();
+        await win.setFocus();
       } else {
         // No pending image (e.g. the window was reloaded after its capture was
         // already consumed/closed). Nothing to show — close instead of hanging
