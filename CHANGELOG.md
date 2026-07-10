@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 date-based patch versions.
 
+## [5.1.21]
+
+### Fixed
+
+- Startup no longer blocks on plugin initialization. Temp cleanup and plugin
+  startup (whose per-plugin hello handshake can take up to 20s) now run on a
+  background thread, so the tray icon and global hotkey are responsive the
+  instant the app launches. Previously a slow or hung plugin during startup could
+  leave the tray menu drawn but unresponsive — the classic "menu opens but Exit
+  does nothing" freeze, most likely to hit right after login when the app
+  auto-starts.
+- Tray "Exit" is now guaranteed to quit: it no longer blocks trying to take the
+  plugin lock (it skips the graceful stop if the lock is held). Plugin child
+  processes are reaped anyway by their Job Object on process exit.
+- Hard timeout on the Google Drive token refresh so a stuck refresh can't pin the
+  shared single-flight refresh gate.
+
+### Diagnostics
+
+- Added startup/lifecycle log breadcrumbs (setup phases, plugin startup, Exit).
+  These honor the existing "Write to Log File" setting — nothing is logged unless
+  it is enabled.
+
 ## [5.1.20]
 
 ### Security
@@ -158,6 +181,7 @@ First open-source release of the Tauri 2 rewrite of ClipToAll.
 - Restrictive Content-Security-Policy and per-window capability scoping.
 - `read_image_base64` restricted to the temp screenshot directory; plugin execution constrained to the plugins directory.
 
+[5.1.21]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.21
 [5.1.20]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.20
 [5.1.19]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.19
 [5.1.18]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.18

@@ -274,12 +274,19 @@ pub async fn get_valid_token() -> Result<String, String> {
         ("grant_type", "refresh_token"),
     ];
 
-    let resp = client
-        .post("https://oauth2.googleapis.com/token")
-        .form(&params)
-        .send()
-        .await
-        .map_err(|e| format!("Token refresh failed: {}", e))?;
+    // Hard outer timeout so REFRESH_GATE (held across this await) can never be
+    // pinned indefinitely, even if the reqwest per-request timeout somehow doesn't
+    // fire — every other GDrive call waits behind this gate.
+    let resp = tokio::time::timeout(
+        std::time::Duration::from_secs(35),
+        client
+            .post("https://oauth2.googleapis.com/token")
+            .form(&params)
+            .send(),
+    )
+    .await
+    .map_err(|_| "Token refresh timed out".to_string())?
+    .map_err(|e| format!("Token refresh failed: {}", e))?;
 
     let status = resp.status();
     if !status.is_success() {

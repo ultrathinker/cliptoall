@@ -414,6 +414,15 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
+            // Load settings FIRST so LOGGING_ON is set before anything else runs —
+            // then the lifecycle breadcrumbs below actually write WHEN the user has
+            // the "Write to Log File" option on (they all go through log(), which is
+            // a no-op while the flag is off — nothing is ever logged without it).
+            let saved_settings = commands::settings::load_settings_sync();
+            LOGGING_ON.store(saved_settings.logging_on, Ordering::Relaxed);
+            DEFAULT_MODE_IS_IMAGE.store(saved_settings.default_mode == "image", Ordering::Relaxed);
+            log("setup: begin");
+
             // Create tray menu (right-click only)
             let settings_item = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
             let about_item = MenuItem::with_id(app, "about", "About", true, None::<&str>)?;
@@ -462,10 +471,16 @@ fn main() {
                             }
                         }
                         "quit" => {
-                            // Stop all plugins before exit
+                            log("tray: Exit requested");
+                            // Best-effort graceful plugin stop, but NEVER block Exit on
+                            // the plugin lock: if a plugin op is stuck holding it, we must
+                            // still exit. try_lock skips the stop rather than hanging; the
+                            // plugin children die anyway via the Job Object's
+                            // KILL_ON_JOB_CLOSE when this process exits.
                             if let Some(state) = app.try_state::<plugins::PluginManagerState>() {
-                                let mut mgr = state.0.lock();
-                                plugins::PluginManager::stop_all(&mut mgr);
+                                if let Some(mut mgr) = state.0.try_lock() {
+                                    plugins::PluginManager::stop_all(&mut mgr);
+                                }
                             }
                             std::process::exit(0);
                         }
@@ -492,13 +507,7 @@ fn main() {
                 })
                 .build(app)?;
 
-            // Remove stale temp screenshots from previous runs (BUGS#7).
-            commands::capture::cleanup_temp_files();
-
-            // Apply settings to cached atomics
-            let saved_settings = commands::settings::load_settings_sync();
-            LOGGING_ON.store(saved_settings.logging_on, Ordering::Relaxed);
-            DEFAULT_MODE_IS_IMAGE.store(saved_settings.default_mode == "image", Ordering::Relaxed);
+            log("setup: tray ready");
 
             // Register global shortcut from settings (default: Alt+X)
             let shortcut = parse_hotkey(&saved_settings.capture_hotkey)
@@ -509,12 +518,28 @@ fn main() {
                 });
             let app_handle = app.handle().clone();
             register_hotkey(&app_handle, shortcut)?;
+            log("setup: hotkey registered");
 
-            // Start enabled plugins from saved config
-            {
+            // Housekeeping + plugin startup run in a BACKGROUND thread. Both can be
+            // slow — cleanup scans %TEMP%, and each plugin's hello handshake can take
+            // up to 20s — and NONE of it must delay the Tauri event loop from starting.
+            // If this ran on the setup thread (as before) a slow/hung plugin would
+            // leave the tray drawn but unresponsive: the OS shows the menu, but no
+            // event is processed, so "Exit does nothing". Doing it off-thread keeps
+            // the tray/hotkey live from the first moment.
+            let bg_app = app.handle().clone();
+            std::thread::spawn(move || {
+                log("startup(bg): begin");
+                // Remove stale temp screenshots from previous runs (BUGS#7).
+                commands::capture::cleanup_temp_files();
+                log("startup(bg): temp cleanup done");
+
+                // Start enabled plugins from saved config.
                 let plugin_configs = commands::plugins::load_plugin_configs_sync();
-                let plugin_state = app.state::<plugins::PluginManagerState>();
+                let plugin_state = bg_app.state::<plugins::PluginManagerState>();
                 let mut mgr = plugin_state.0.lock();
+                let enabled = plugin_configs.iter().filter(|c| c.enabled).count();
+                log(&format!("startup(bg): starting {} enabled plugin(s)", enabled));
                 for cfg in &plugin_configs {
                     if !cfg.enabled { continue; }
                     if let Err(e) = commands::plugins::ensure_in_plugins_dir(
@@ -527,6 +552,7 @@ fn main() {
                     let (ptype, mode) = plugins::detect_plugin_type(&cfg.path);
                     match ptype {
                         plugins::PluginType::Exe => {
+                            log(&format!("startup(bg): starting exe plugin {}", cfg.path));
                             match mgr.start_plugin(&cfg.path, &cfg.key_bindings) {
                                 Ok(hello) => log(&format!("Plugin started: {} ({})", hello.name, cfg.path)),
                                 Err(e) => log(&format!("Plugin failed to start {}: {}", cfg.path, e)),
@@ -534,6 +560,7 @@ fn main() {
                         }
                         _ => {
                             // Script plugin — read metadata, then start
+                            log(&format!("startup(bg): starting script plugin {}", cfg.path));
                             if let Ok(content) = std::fs::read_to_string(&cfg.path) {
                                 if let Some((hello, _)) = plugins::parse_script_metadata(&content, ptype) {
                                     match mgr.start_plugin_ext(&cfg.path, ptype, mode, &hello, &cfg.key_bindings) {
@@ -549,7 +576,9 @@ fn main() {
                         }
                     }
                 }
-            }
+                drop(mgr);
+                log("startup(bg): plugin startup complete");
+            });
 
             // Start GDrive pre-allocation daemon after 15s delay (if configured)
             if saved_settings.storage_type == "gdrive" && commands::upload_gdrive::gdrive_has_token() {
@@ -557,10 +586,12 @@ fn main() {
                 let pool_inner = pool_state.inner.clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                    log("gdrive: starting pre-allocation daemon");
                     commands::gdrive_pool::start_daemon(pool_inner);
                 });
             }
 
+            log("setup: complete, event loop starting");
             Ok(())
         })
         // Only prevent close on main window; results windows close normally
