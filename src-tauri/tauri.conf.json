@@ -1,6 +1,6 @@
 {
   "productName": "ClipToAll",
-  "version": "5.1.22",
+  "version": "5.1.23",
   "identifier": "net.appshub.cliptoall",
   "build": {
     "beforeDevCommand": "npm run dev",
