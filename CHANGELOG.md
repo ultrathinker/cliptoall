@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 date-based patch versions.
 
+## [5.1.25]
+
+### Added
+
+- Hold **Shift** while dragging the region selection to constrain it to a perfect
+  square. It works in every drag direction, updates live when you press or release
+  Shift mid-drag, and stays square when clamped near a screen edge.
+
 ## [5.1.24]
 
 ### Fixed
@@ -214,6 +222,7 @@ First open-source release of the Tauri 2 rewrite of ClipToAll.
 - Restrictive Content-Security-Policy and per-window capability scoping.
 - `read_image_base64` restricted to the temp screenshot directory; plugin execution constrained to the plugins directory.
 
+[5.1.25]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.25
 [5.1.24]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.24
 [5.1.23]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.23
 [5.1.22]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.22

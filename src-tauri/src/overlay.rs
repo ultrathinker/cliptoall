@@ -75,6 +75,52 @@ fn hiword(l: isize) -> i32 {
     ((l >> 16) & 0xFFFF) as i16 as i32
 }
 
+/// Virtual-key code for Shift (either shift key reports this).
+const VK_SHIFT_CODE: u16 = 0x10;
+
+/// Constrain the drag end point to a perfect SQUARE anchored at (start_x,start_y),
+/// for Shift-drag. The side = max(|dx|,|dy|) so the square always contains the drag
+/// vector, the drag DIRECTION is preserved via the sign of each delta (a zero delta
+/// counts as positive), and the side is clamped to the pixels available from the
+/// anchor toward the drag direction — clamping the SIDE (not the point) so the
+/// selection can never stop being square, nor exceed the [0,max) client area (the
+/// crop reads the captured buffer by this rect, so an out-of-bounds rect must be
+/// impossible). Pure (no winapi) so it is unit-tested below.
+fn constrain_square(start_x: i32, start_y: i32, cur_x: i32, cur_y: i32, max_w: i32, max_h: i32) -> (i32, i32) {
+    let dx = cur_x - start_x;
+    let dy = cur_y - start_y;
+    let sx = if dx < 0 { -1 } else { 1 };
+    let sy = if dy < 0 { -1 } else { 1 };
+    // Available pixels from the anchor in each direction (client area is 0..max-1).
+    let room_x = if sx < 0 { start_x } else { (max_w - 1 - start_x).max(0) };
+    let room_y = if sy < 0 { start_y } else { (max_h - 1 - start_y).max(0) };
+    let side = dx.abs().max(dy.abs()).min(room_x).min(room_y).max(0);
+    (start_x + sx * side, start_y + sy * side)
+}
+
+/// The effective selection rect (x, y, w, h) for the current drag — the single
+/// source of truth shared by WM_PAINT (preview/label) and WM_LBUTTONUP (result),
+/// so the highlighted area, the "W × H" label and the captured region can never
+/// disagree. Applies the Shift = square constraint when Shift is held.
+///
+/// Uses GetKeyState (synchronized with the message currently being processed),
+/// NOT GetAsyncKeyState (live physical state), so paint and button-up see the same
+/// Shift state as the message stream that drove them.
+unsafe fn effective_selection(state: &OverlayState) -> (i32, i32, i32, i32) {
+    let (mut ex, mut ey) = (state.current_x, state.current_y);
+    let shift_down = (GetKeyState(VK_SHIFT_CODE as i32) as u16 & 0x8000) != 0;
+    if shift_down {
+        let (sx, sy) = constrain_square(
+            state.start_x, state.start_y, ex, ey, state.screen_width, state.screen_height,
+        );
+        ex = sx;
+        ey = sy;
+    }
+    let x = state.start_x.min(ex);
+    let y = state.start_y.min(ey);
+    (x, y, (ex - state.start_x).abs(), (ey - state.start_y).abs())
+}
+
 /// Show a native Win32 fullscreen overlay for region selection.
 /// Blocks until the user selects a region or cancels.
 /// Returns Some(SelectionRect) on success, None on cancel.
@@ -328,10 +374,7 @@ unsafe extern "system" fn overlay_wndproc(
 
             // 2. If selection, draw bright original in selection area
             if state.is_drawing {
-                let sel_x = state.start_x.min(state.current_x);
-                let sel_y = state.start_y.min(state.current_y);
-                let sel_w = (state.current_x - state.start_x).abs();
-                let sel_h = (state.current_y - state.start_y).abs();
+                let (sel_x, sel_y, sel_w, sel_h) = effective_selection(state);
 
                 if sel_w > 1 && sel_h > 1 {
                     // BitBlt only the selection area from original
@@ -425,10 +468,9 @@ unsafe extern "system" fn overlay_wndproc(
                 state.is_drawing = false;
                 let _ = ReleaseCapture();
 
-                let x = state.start_x.min(state.current_x);
-                let y = state.start_y.min(state.current_y);
-                let w = (state.current_x - state.start_x).abs();
-                let h = (state.current_y - state.start_y).abs();
+                // Same shared helper as WM_PAINT → the captured region matches the
+                // square the user was shown (incl. the Shift constraint).
+                let (x, y, w, h) = effective_selection(state);
 
                 if w >= 5 && h >= 5 {
                     state.result = Some(OverlayResult::Selection(SelectionRect {
@@ -460,6 +502,13 @@ unsafe extern "system" fn overlay_wndproc(
                 // VK_ESCAPE — always cancel
                 let _ = ReleaseCapture();
                 let _ = DestroyWindow(hwnd);
+            } else if key == VK_SHIFT_CODE {
+                // Shift pressed → repaint so the square constraint appears live even
+                // if the mouse is held still. Skip keyboard autorepeat (lparam bit
+                // 30 = the key was already down) to avoid a stream of no-op repaints.
+                if !state_ptr.is_null() && (*state_ptr).is_drawing && (lparam.0 & (1 << 30)) == 0 {
+                    let _ = InvalidateRect(hwnd, None, false);
+                }
             } else if !state_ptr.is_null() {
                 let state = &mut *state_ptr;
                 // Check plugin key map first
@@ -469,6 +518,19 @@ unsafe extern "system" fn overlay_wndproc(
                     state.result = Some(OverlayResult::PluginCall { path, function_id: func_id });
                     let _ = ReleaseCapture();
                     let _ = DestroyWindow(hwnd);
+                }
+            }
+            LRESULT(0)
+        }
+
+        // Shift released → repaint so the square constraint drops immediately (no
+        // mouse move is generated by a key release). WM_SYSKEYUP covers Shift
+        // released while Alt is held.
+        WM_KEYUP | WM_SYSKEYUP => {
+            if (wparam.0 as u16) == VK_SHIFT_CODE {
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OverlayState;
+                if !state_ptr.is_null() && (*state_ptr).is_drawing {
+                    let _ = InvalidateRect(hwnd, None, false);
                 }
             }
             LRESULT(0)
@@ -486,5 +548,42 @@ unsafe extern "system" fn overlay_wndproc(
         }
 
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::constrain_square;
+
+    #[test]
+    fn square_extends_in_drag_direction() {
+        // down-right, dx dominant → side 30, anchored at start
+        assert_eq!(constrain_square(10, 10, 40, 25, 1000, 1000), (40, 40));
+        // up-left → both signs negative, dy dominant → side 80
+        assert_eq!(constrain_square(100, 100, 60, 20, 1000, 1000), (20, 20));
+        // up-right
+        assert_eq!(constrain_square(100, 100, 160, 40, 1000, 1000), (160, 40));
+    }
+
+    #[test]
+    fn zero_delta_axis_counts_as_positive() {
+        // Perfectly vertical drag: dx == 0 → square grows to the right.
+        assert_eq!(constrain_square(50, 50, 50, 90, 1000, 1000), (90, 90));
+        // Perfectly horizontal drag: dy == 0 → square grows downward.
+        assert_eq!(constrain_square(50, 50, 90, 50, 1000, 1000), (90, 90));
+    }
+
+    #[test]
+    fn side_is_clamped_to_screen_but_stays_square() {
+        // Anchored near the right edge, long downward drag: room_x limits the side
+        // to 9, and the result is still a square (equal offset on both axes).
+        assert_eq!(constrain_square(990, 10, 995, 900, 1000, 1000), (999, 19));
+        // Near the top edge dragging up: room_y clamps the side to the anchor's y.
+        assert_eq!(constrain_square(500, 8, 400, 0, 1000, 1000), (492, 0));
+    }
+
+    #[test]
+    fn degenerate_drag_is_zero_sized() {
+        assert_eq!(constrain_square(42, 42, 42, 42, 1000, 1000), (42, 42));
     }
 }
