@@ -298,7 +298,7 @@ fn print_help() {
     println!("{}", PLUGIN_DESCRIPTION);
     println!();
     // Print instruction with actual newlines
-    for line in PLUGIN_INSTRUCTION.split("\\n") {
+    for line in PLUGIN_INSTRUCTION.lines() {
         println!("{}", line.trim());
     }
     println!();

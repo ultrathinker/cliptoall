@@ -222,15 +222,15 @@ First open-source release of the Tauri 2 rewrite of ClipToAll.
 - Restrictive Content-Security-Policy and per-window capability scoping.
 - `read_image_base64` restricted to the temp screenshot directory; plugin execution constrained to the plugins directory.
 
-[5.1.25]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.25
-[5.1.24]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.24
-[5.1.23]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.23
-[5.1.22]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.22
-[5.1.21]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.21
-[5.1.20]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.20
-[5.1.19]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.19
-[5.1.18]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.18
-[5.1.17]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.17
-[5.1.16]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.16
-[5.1.15]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.15
-[5.1.14]: https://github.com/ultrathinker/ClipToAll/releases/tag/v5.1.14
+[5.1.25]: https://github.com/ultrathinker/cliptoall/releases/tag/v5.1.25
+[5.1.24]: https://github.com/ultrathinker/cliptoall/releases/tag/v5.1.24
+[5.1.23]: https://github.com/ultrathinker/cliptoall/releases/tag/v5.1.23
+[5.1.22]: https://github.com/ultrathinker/cliptoall/releases/tag/v5.1.22
+[5.1.21]: https://github.com/ultrathinker/cliptoall/releases/tag/v5.1.21
+[5.1.20]: https://github.com/ultrathinker/cliptoall/releases/tag/v5.1.20
+[5.1.19]: https://github.com/ultrathinker/cliptoall/releases/tag/v5.1.19
+[5.1.18]: https://github.com/ultrathinker/cliptoall/releases/tag/v5.1.18
+[5.1.17]: https://github.com/ultrathinker/cliptoall/releases/tag/v5.1.17
+[5.1.16]: https://github.com/ultrathinker/cliptoall/releases/tag/v5.1.16
+[5.1.15]: https://github.com/ultrathinker/cliptoall/releases/tag/v5.1.15
+[5.1.14]: https://github.com/ultrathinker/cliptoall/releases/tag/v5.1.14

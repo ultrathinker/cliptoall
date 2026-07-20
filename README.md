@@ -7,6 +7,8 @@
 Press a hotkey, select a region, and the link (or the image itself) is on your clipboard — annotated and uploaded, without leaving the keyboard.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![build](https://github.com/ultrathinker/cliptoall/actions/workflows/build.yml/badge.svg)](https://github.com/ultrathinker/cliptoall/actions/workflows/build.yml)
+[![release](https://github.com/ultrathinker/cliptoall/actions/workflows/release.yml/badge.svg)](https://github.com/ultrathinker/cliptoall/actions/workflows/release.yml)
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6)
 ![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24C8DB)
 ![Svelte 5](https://img.shields.io/badge/Svelte-5-FF3E00)
@@ -56,6 +58,19 @@ The backend currently uses Win32 APIs for screen capture, clipboard, the region-
 | Plugins | Script editor | AI instructions |
 |---|---|---|
 | ![Plugins tab](docs/screenshots/settings-plugins.png) | ![Script editor](docs/screenshots/script-editor.png) | ![AI instructions](docs/screenshots/ai-instructions.png) |
+
+## Download
+
+Prebuilt Windows binaries are published on the **[Releases](https://github.com/ultrathinker/cliptoall/releases)** page.
+
+Each release is produced by [`release.yml`](.github/workflows/release.yml), which is triggered by a `v*` tag and runs `tauri build` on Windows via `tauri-apps/tauri-action`. It attaches two artifacts:
+
+- **`*-setup.exe`** — NSIS installer. Adds a Start Menu shortcut, an uninstall entry, and installs the WebView2 runtime if it's missing.
+- **`ClipToAll-<version>-portable.exe`** — standalone single-file executable. No install needed; just run it from anywhere (it self-registers autostart at runtime if you enable it in Settings). Requires the WebView2 runtime, which is preinstalled on Windows 11 and most Windows 10.
+
+> Releases are not code-signed yet, so Windows SmartScreen may warn on first launch — click **More info → Run anyway**.
+
+If you prefer to build from source, see the next section.
 
 ## Quick start (build from source)
 
