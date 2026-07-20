@@ -8,7 +8,7 @@
   "homepage": "https://cliptoall.appshub.net",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ultrathinker/ClipToAll.git"
+    "url": "https://github.com/ultrathinker/cliptoall.git"
   },
   "scripts": {
     "dev": "vite",

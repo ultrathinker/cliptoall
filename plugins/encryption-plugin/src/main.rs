@@ -24,7 +24,7 @@ Two schemes are available (set \"scheme\" in Settings):\n\
 AES-256-GCM (authenticated). Recommended.\n\
 • \"legacy\" — AES-256-CBC, key=sha256(Password), IV=sha256('ClipToAll') [first 16 \
 bytes]. Opt-in interop mode: its output is decryptable by the .NET/old version of \
-ClipToAll. Try online: https://the-x.cn/en-us/cryptography/Aes.aspx\n\n\
+ClipToAll. Output is base64 of (raw ciphertext bytes) with PKCS#7 padding.\n\n\
 Decryption auto-detects both schemes, so anything encrypted earlier keeps working.";
 const SETTINGS_DESCRIPTION: &str = "Requires an encryption password. Optional \
 \"scheme\": \"strong\" (default — PBKDF2 + AES-256-GCM, authenticated) or \
@@ -199,7 +199,7 @@ fn print_help() {
     println!("{} v{}", PLUGIN_NAME, PLUGIN_VERSION);
     println!("{}", PLUGIN_DESCRIPTION);
     println!();
-    for line in PLUGIN_INSTRUCTION.split("\\n") {
+    for line in PLUGIN_INSTRUCTION.lines() {
         println!("{}", line.trim());
     }
     println!();

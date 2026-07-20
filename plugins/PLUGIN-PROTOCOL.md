@@ -203,6 +203,11 @@ The output is pretty-printed JSON (unlike daemon mode which uses compact one-lin
 
 Any language that can read stdin and write stdout works. The existing plugins are written in Rust.
 
+> **Runnable examples:** see [`examples/`](examples/) for minimal, ready-to-run
+> script plugins in Python, C#, and PowerShell that mirror the in-app templates
+> and speak this protocol end-to-end. The [`examples/README.md`](examples/README.md)
+> explains how to test them manually and deploy them.
+
 ### Rust
 
 Use the existing plugins as a starting point:
@@ -228,11 +233,15 @@ Copy plugin files to the `plugins/` folder next to `ClipToAll.exe`. The host sca
 
 Plugins are sorted by **file modification time** (oldest first — chronological/date-added order), not alphabetically. The Plugins tab defaults to this order ("By date added") and offers an optional "By name" sort.
 
-### C# Pre-compilation
+### C# Cold-Start Latency
 
-C# scripts are pre-compiled when saved or enabled, eliminating the first-run delay. The dotnet SDK caches the compilation automatically.
+C# scripts are launched with `dotnet run file.cs` on **every** call (oneshot and daemon startup alike) — there is no compiled `.exe` artifact reused across invocations. When a script is saved or enabled, ClipToAll runs `dotnet run file.cs -- --help` once to **warm** the .NET SDK's caches (package restore, generated assembly), and compilation warnings are suppressed via `--property:WarningLevel=0` to keep stdout clean for JSON parsing.
 
-C# scripts are compiled with `--property:WarningLevel=0` to suppress all compiler warnings that would otherwise clutter stdout and break JSON parsing.
+That pre-warm step only primes the SDK's own caches — it does **not** produce a standalone binary, and it does **not** eliminate the per-call latency of `dotnet run`. Expect each invocation to incur the .NET SDK startup + JIT cost: typically a few hundred milliseconds to a couple of seconds on a warm cache, and noticeably longer on a cold machine or after editing the script. Daemon-mode C# plugins pay this cost only once at startup; oneshot C# plugins pay it on every hotkey press.
+
+For latency-sensitive plugins, prefer one of:
+- The native **executable** plugin type (compile the C# to an `.exe` ahead of time).
+- **Daemon** mode for C# scripts (single `dotnet run` at startup, then cheap stdin/stdout calls).
 
 ---
 
@@ -405,6 +414,6 @@ dotnet run script.cs -- --daemon
 powershell -NoProfile -File script.ps1 --daemon
 ```
 
-### C# Pre-compilation
+### C# Cold-Start Latency
 
-C# scripts are pre-compiled when saved or enabled, eliminating the first-run delay. The dotnet SDK caches the compilation automatically.
+As noted under [Building a Plugin](#c-cold-start-latency), C# scripts are launched with `dotnet run` on every call. The save/enable "pre-compile" step only warms the SDK caches; it does not produce a reusable binary. Daemon-mode C# plugins pay this cost once at startup; oneshot C# plugins incur the full `dotnet run` startup + JIT latency on every invocation.

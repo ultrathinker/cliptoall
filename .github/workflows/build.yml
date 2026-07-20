@@ -54,6 +54,15 @@ jobs:
       - name: Test (Rust)
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+      # Build the standalone plugin crates (separate Cargo workspaces, each with
+      # its own Cargo.toml under plugins/<crate>/). `aumid-plugin` uses windows-rs
+      # and only compiles on Windows, which matches the matrix above.
+      - name: Build plugin crates
+        run: |
+          cargo build --manifest-path plugins/plugin-template/Cargo.toml
+          cargo build --manifest-path plugins/encryption-plugin/Cargo.toml
+          cargo build --manifest-path plugins/aumid-plugin/Cargo.toml
+
       # Install a prebuilt cargo-audit binary (no compile) — lighter than
       # `cargo install cargo-audit`, and avoids rustsec/audit-check's assumption
       # of a repo-root Cargo.lock (ours lives in src-tauri).
