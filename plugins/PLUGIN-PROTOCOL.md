@@ -190,7 +190,7 @@ Where `test.json`:
 }
 ```
 
-The output is pretty-printed JSON (unlike daemon mode which uses compact one-line JSON):
+The output is one JSON result line on stdout (compact is fine — the host reads the last non-empty line):
 ```json
 {
   "type": "result",
