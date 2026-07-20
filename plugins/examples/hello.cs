@@ -17,8 +17,8 @@
 //   dotnet run hello.cs -- --call @file.json  Oneshot: read call JSON from a file
 //   dotnet run hello.cs -- --daemon           Plugin mode: hello line, then stdin loop
 //
-// Manual JSON output is used because `dotnet run file.cs` runs in AOT mode with
-// reflection disabled, where JsonSerializer.Serialize() throws at runtime.
+// Manual JSON output is used to avoid depending on System.Text.Json reflection/trimming
+// behavior when the plugin is later compiled/trimmed; hand-written JSON is always safe.
 
 using System;
 
@@ -56,7 +56,7 @@ static void RunDaemon()
         if (string.IsNullOrEmpty(line)) continue;
 
         // Minimal hand-rolled JSON peek for the "type" and "function" fields —
-        // avoids System.Text.Json reflection, which is unavailable under AOT.
+        // avoids relying on System.Text.Json reflection (safe under trimming/AOT).
         var type = PeekJsonField(line, "type");
         if (type == "shutdown") break;
         if (type == "call")
