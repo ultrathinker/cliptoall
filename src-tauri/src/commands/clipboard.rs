@@ -1,12 +1,18 @@
+#[cfg(windows)]
 use std::ptr;
+#[cfg(windows)]
 use windows::Win32::Foundation::{GlobalFree, HWND};
+#[cfg(windows)]
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
 };
+#[cfg(windows)]
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 
+#[cfg(windows)]
 const CF_DIB: u32 = 8;
 
+#[cfg(windows)]
 #[repr(C, packed)]
 struct BitmapInfoHeader {
     size: u32,
@@ -22,7 +28,19 @@ struct BitmapInfoHeader {
     clr_important: u32,
 }
 
+/// Clear the macOS clipboard. Placeholder until `arboard` lands (PLAN.md 1.1).
+#[cfg(not(windows))]
+pub fn clear_clipboard() {}
+
+/// Placeholder until `arboard::set_image` (NSPasteboard) lands (PLAN.md 1.1).
+#[cfg(not(windows))]
+#[tauri::command]
+pub fn copy_image_to_clipboard(_path: String, _output_scale: f32) -> Result<(), String> {
+    Err("copy_image_to_clipboard not yet implemented on macOS".to_string())
+}
+
 /// Clear the Windows clipboard.
+#[cfg(windows)]
 pub fn clear_clipboard() {
     unsafe {
         if OpenClipboard(HWND(ptr::null_mut())).is_ok() {
@@ -36,6 +54,7 @@ pub fn clear_clipboard() {
 /// `output_scale` applies the same DPI downscale used for uploads (when enabled),
 /// so a pasted image matches the logical on-screen size instead of being oversized
 /// on HiDPI captures. The source stays a full-res lossless working copy.
+#[cfg(windows)]
 #[tauri::command]
 pub fn copy_image_to_clipboard(path: String, output_scale: f32) -> Result<(), String> {
     // Only ever read the app's own temp screenshot — a compromised WebView must

@@ -23,13 +23,7 @@ pub fn invalidate_overlay() {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct SelectionRect {
-    pub x: i32,
-    pub y: i32,
-    pub width: i32,
-    pub height: i32,
-}
+pub use crate::geometry::SelectionRect;
 
 #[derive(Debug)]
 pub enum OverlayResult {

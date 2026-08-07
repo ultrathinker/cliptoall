@@ -1,8 +1,11 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(windows)]
 mod aumid;
 mod commands;
+mod geometry;
+#[cfg(windows)]
 mod overlay;
 mod plugins;
 mod utils;
@@ -10,6 +13,7 @@ mod utils;
 use std::collections::HashMap;
 use parking_lot::Mutex; // non-poisoning; lock() returns the guard directly
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(windows)]
 use std::time::Instant;
 
 /// Prevents multiple overlays from stacking when hotkey is pressed rapidly.
@@ -25,7 +29,9 @@ pub static LOGGING_ON: AtomicBool = AtomicBool::new(false);
 pub static DEFAULT_MODE_IS_IMAGE: AtomicBool = AtomicBool::new(true);
 /// Tracks the currently registered global shortcut for unregister/reregister.
 static CURRENT_SHORTCUT: Mutex<Option<Shortcut>> = Mutex::new(None);
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
+#[cfg(windows)]
+use tauri::{WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager,
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState},
     WindowEvent};
@@ -113,6 +119,11 @@ fn apply_window_icons(window: &tauri::WebviewWindow) {
     }
 }
 
+/// No-op on macOS: the .icns bundle icon covers Dock/window chrome, no
+/// per-context caption/taskbar icon fixup needed.
+#[cfg(not(windows))]
+fn apply_window_icons(_window: &tauri::WebviewWindow) {}
+
 /// Stores image paths and flags for newly created results windows.
 /// Window fetches its data on mount via get_pending_image command.
 struct PendingImage {
@@ -171,6 +182,14 @@ pub fn log(msg: &str) {
 }
 
 /// Capture screen, show native overlay, crop, then open a NEW results window.
+/// Placeholder until the macOS web overlay lands (PLAN.md Phase 3) — the
+/// hotkey is registered but capture is a no-op so the app still runs.
+#[cfg(not(windows))]
+fn start_capture(_app: AppHandle) {
+    log("start_capture: not yet implemented on macOS (web overlay pending, Phase 3)");
+}
+
+#[cfg(windows)]
 fn start_capture(app: AppHandle) {
     // Prevent stacking overlays when Alt+X is pressed rapidly
     if CAPTURE_IN_PROGRESS.swap(true, Ordering::SeqCst) {
@@ -477,6 +496,7 @@ fn register_hotkey(app: &AppHandle, shortcut: Shortcut) -> Result<(), String> {
                 let current = COPY_IMAGE_MODE.load(Ordering::SeqCst);
                 COPY_IMAGE_MODE.store(!current, Ordering::SeqCst);
                 // Force overlay to repaint immediately so tint changes visually
+                #[cfg(windows)]
                 overlay::invalidate_overlay();
                 log(&format!("  Hotkey double-press → toggled to {}", if !current { "copy image" } else { "copy link" }));
                 return;

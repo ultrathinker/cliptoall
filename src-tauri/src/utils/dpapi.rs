@@ -3,14 +3,18 @@
 //! Uses CryptProtectData / CryptUnprotectData (CurrentUser scope)
 //! to encrypt sensitive data. Only the same Windows user can decrypt.
 
+#[cfg(windows)]
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+#[cfg(windows)]
 use windows::Win32::Foundation::{HLOCAL, LocalFree};
+#[cfg(windows)]
 use windows::Win32::Security::Cryptography::{
     CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB,
 };
 
 /// Free a buffer allocated by DPAPI. MSDN specifies `LocalFree` for the
 /// CryptProtectData/CryptUnprotectData output blob (3.21).
+#[cfg(windows)]
 unsafe fn free_dpapi_blob(ptr: *mut u8) {
     if !ptr.is_null() {
         let _ = LocalFree(HLOCAL(ptr as *mut _));
@@ -18,9 +22,11 @@ unsafe fn free_dpapi_blob(ptr: *mut u8) {
 }
 
 /// Prefix for DPAPI-encrypted fields stored inline in JSON.
+#[cfg(windows)]
 const DPAPI_PREFIX: &str = "dpapi:";
 
 /// Encrypt a string using Windows DPAPI (CurrentUser scope), return base64.
+#[cfg(windows)]
 pub fn dpapi_encrypt(plaintext: &str) -> Result<String, String> {
     unsafe {
         let input_bytes = plaintext.as_bytes();
@@ -48,6 +54,7 @@ pub fn dpapi_encrypt(plaintext: &str) -> Result<String, String> {
 }
 
 /// Decrypt a base64+DPAPI string back to plaintext.
+#[cfg(windows)]
 pub fn dpapi_decrypt(encrypted_b64: &str) -> Result<String, String> {
     let encrypted = BASE64.decode(encrypted_b64).map_err(|e| format!("base64 decode: {}", e))?;
 
@@ -78,6 +85,7 @@ pub fn dpapi_decrypt(encrypted_b64: &str) -> Result<String, String> {
 /// Encrypt a field value for inline storage in JSON.
 /// Prepends "dpapi:" prefix so the value can be identified as encrypted.
 /// Returns empty string unchanged (no point encrypting nothing).
+#[cfg(windows)]
 pub fn encrypt_field(value: &str) -> Result<String, String> {
     if value.is_empty() {
         return Ok(String::new());
@@ -93,6 +101,7 @@ pub fn encrypt_field(value: &str) -> Result<String, String> {
 
 /// Decrypt a field value from JSON.
 /// Detects "dpapi:" prefix → decrypt. No prefix → return as-is (plaintext migration).
+#[cfg(windows)]
 pub fn decrypt_field(value: &str) -> String {
     if value.is_empty() {
         return String::new();
@@ -109,4 +118,30 @@ pub fn decrypt_field(value: &str) -> String {
         // No prefix — plaintext (pre-encryption migration), return as-is
         value.to_string()
     }
+}
+
+/// Placeholder until Keychain-backed encryption lands (PLAN.md Phase 1.2).
+#[cfg(not(windows))]
+pub fn dpapi_encrypt(_plaintext: &str) -> Result<String, String> {
+    Err("dpapi_encrypt not yet implemented on macOS".to_string())
+}
+
+/// Placeholder until Keychain-backed encryption lands (PLAN.md Phase 1.2).
+#[cfg(not(windows))]
+pub fn dpapi_decrypt(_encrypted_b64: &str) -> Result<String, String> {
+    Err("dpapi_decrypt not yet implemented on macOS".to_string())
+}
+
+/// Placeholder until Keychain-backed encryption lands (PLAN.md Phase 1.2) —
+/// same `encrypt_field`/`decrypt_field` interface, no migration from DPAPI.
+#[cfg(not(windows))]
+pub fn encrypt_field(_value: &str) -> Result<String, String> {
+    Err("encrypt_field not yet implemented on macOS".to_string())
+}
+
+#[cfg(not(windows))]
+pub fn decrypt_field(value: &str) -> String {
+    // No encrypted-storage backend yet: pass through unchanged (matches the
+    // Windows "no prefix -> plaintext" fallback) rather than losing the value.
+    value.to_string()
 }

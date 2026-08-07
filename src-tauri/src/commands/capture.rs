@@ -1,8 +1,12 @@
 use chrono::{Datelike, Timelike};
 use base64::Engine;
+#[cfg(windows)]
 use windows::Win32::Foundation::POINT;
+#[cfg(windows)]
 use windows::Win32::Graphics::Gdi::*;
+#[cfg(windows)]
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// Raw screenshot data kept in memory (no file I/O)
@@ -294,7 +298,14 @@ pub fn cleanup_temp_files() {
     }
 }
 
+/// Placeholder until the `xcap`-based capture lands (PLAN.md Phase 2).
+#[cfg(not(windows))]
+pub fn capture_to_memory() -> Result<CaptureData, String> {
+    Err("capture_to_memory not yet implemented on macOS".to_string())
+}
+
 /// Capture the screen to memory (no file I/O). Used by native overlay.
+#[cfg(windows)]
 pub fn capture_to_memory() -> Result<CaptureData, String> {
     use std::time::Instant;
     let t0 = Instant::now();
@@ -385,7 +396,7 @@ pub fn capture_to_memory() -> Result<CaptureData, String> {
 /// different scale are handled correctly.
 pub fn crop_and_save_from_buffer(
     data: &CaptureData,
-    sel: &crate::overlay::SelectionRect,
+    sel: &crate::geometry::SelectionRect,
 ) -> Result<(String, f32), String> {
     let sw = data.width as usize;
     let sh = data.height as usize;
@@ -435,6 +446,7 @@ pub fn crop_and_save_from_buffer(
 }
 
 /// Effective DPI scale (1.0 = 96 dpi/100%) of the monitor containing a point.
+#[cfg(windows)]
 fn get_monitor_scale(x: i32, y: i32) -> f32 {
     unsafe {
         let hmon = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
@@ -446,6 +458,14 @@ fn get_monitor_scale(x: i32, y: i32) -> f32 {
             1.0
         }
     }
+}
+
+/// Placeholder until Retina `backingScaleFactor` detection lands (PLAN.md
+/// Phase 2.2). Returning 1.0 means output stays full-resolution (no downscale)
+/// until then.
+#[cfg(not(windows))]
+fn get_monitor_scale(_x: i32, _y: i32) -> f32 {
+    1.0
 }
 
 /// Save the editor canvas (PNG base64) as a LOSSLESS PNG working copy. Keeping
@@ -477,8 +497,17 @@ pub fn save_image_base64(base64_data: String) -> Result<String, String> {
     Ok(output_path.to_string_lossy().to_string())
 }
 
+/// Placeholder until a native macOS save panel (`NSSavePanel` via a Tauri
+/// dialog plugin) lands.
+#[cfg(not(windows))]
+#[tauri::command]
+pub fn save_image_to_file(_source_path: String, _output_scale: f32) -> Result<Option<String>, String> {
+    Err("save_image_to_file not yet implemented on macOS".to_string())
+}
+
 /// Show a native Win32 Save File dialog and copy the image to the chosen path.
 /// Returns Some(path) if saved, None if user cancelled.
+#[cfg(windows)]
 #[tauri::command]
 pub fn save_image_to_file(source_path: String, output_scale: f32) -> Result<Option<String>, String> {
     use std::path::Path;

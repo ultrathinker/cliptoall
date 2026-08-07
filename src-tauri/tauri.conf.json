@@ -12,7 +12,8 @@
     "active": true,
     "targets": ["nsis"],
     "icon": [
-      "icons/ClipToAll-all.ico"
+      "icons/ClipToAll-all.ico",
+      "icons/ClipToAll-32x32.png"
     ]
   },
   "app": {
