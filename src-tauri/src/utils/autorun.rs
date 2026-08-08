@@ -27,8 +27,9 @@ pub fn set_autorun(enable: bool) -> Result<(), String> {
 
 /// LaunchAgent label — also its plist filename. Matches the app's bundle
 /// identifier (tauri.conf.json) since this is the only LaunchAgent ClipToAll
-/// installs.
-#[cfg(not(windows))]
+/// installs. macOS-only: `launchctl`/LaunchAgents don't exist on Linux, so
+/// this is gated to the actual OS rather than `cfg(not(windows))`.
+#[cfg(target_os = "macos")]
 const LAUNCH_AGENT_LABEL: &str = "net.appshub.cliptoall";
 
 /// Hand-rolled LaunchAgent plist rather than tauri-plugin-autostart: that
@@ -37,13 +38,26 @@ const LAUNCH_AGENT_LABEL: &str = "net.appshub.cliptoall";
 /// settings-save path with no `AppHandle` in scope — threading one through
 /// just for this would touch call sites that have nothing to do with
 /// autostart. A plist write + `launchctl` needs no handle at all.
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 fn launch_agent_path() -> Result<std::path::PathBuf, String> {
     let home = dirs::home_dir().ok_or_else(|| "Could not resolve home directory".to_string())?;
     Ok(home.join("Library/LaunchAgents").join(format!("{}.plist", LAUNCH_AGENT_LABEL)))
 }
 
-#[cfg(not(windows))]
+/// Escape the 5 XML predefined entities. `exe_path` is filesystem-derived,
+/// not user-typed free text, but an install path CAN legitimately contain
+/// `&`/`<`/`>` (e.g. a custom folder name) — interpolating it unescaped would
+/// write a plist `launchd`/`launchctl` silently fail to parse.
+#[cfg(target_os = "macos")]
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+#[cfg(target_os = "macos")]
 pub fn set_autorun(enable: bool) -> Result<(), String> {
     let path = launch_agent_path()?;
 
@@ -67,9 +81,18 @@ pub fn set_autorun(enable: bool) -> Result<(), String> {
 </dict>
 </plist>
 "#,
-            label = LAUNCH_AGENT_LABEL,
-            exe = exe_path.to_string_lossy(),
+            label = xml_escape(LAUNCH_AGENT_LABEL),
+            exe = xml_escape(&exe_path.to_string_lossy()),
         );
+
+        // Skip the write + launchctl round-trip if the plist is already
+        // exactly what we're about to write (settings.rs calls set_autorun
+        // unconditionally on EVERY save, not just when the flag changes —
+        // same as the Windows registry path above, but a `launchctl` spawn +
+        // file rewrite is much more expensive per call than a registry write).
+        if std::fs::read_to_string(&path).ok().as_deref() == Some(plist.as_str()) {
+            return Ok(());
+        }
 
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -83,6 +106,9 @@ pub fn set_autorun(enable: bool) -> Result<(), String> {
         // `launchctl load` fails here (e.g. a stale load from a previous run).
         let _ = std::process::Command::new("launchctl").args(["load", "-w"]).arg(&path).output();
     } else {
+        if !path.exists() {
+            return Ok(());
+        }
         let _ = std::process::Command::new("launchctl").args(["unload", "-w"]).arg(&path).output();
         let _ = std::fs::remove_file(&path);
     }

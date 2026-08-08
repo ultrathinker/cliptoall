@@ -134,18 +134,18 @@ pub fn decrypt_field(value: &str) -> String {
 
 /// Service name all ClipToAll Keychain entries are filed under (visible in
 /// Keychain Access.app as the entries' "Where" column).
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 const KEYCHAIN_SERVICE: &str = "ClipToAll";
 
 /// Prefix for Keychain-backed fields stored inline in JSON — analogous to
 /// Windows' "dpapi:" prefix, but the payload is an account name, not ciphertext.
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 const KEYCHAIN_PREFIX: &str = "keychain:";
 
 /// Store `plaintext` in the Keychain under `account` (stable — a re-save
 /// overwrites the same entry instead of leaking a new one), return the
 /// opaque reference to embed inline in JSON.
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 pub fn dpapi_encrypt(account: &str, plaintext: &str) -> Result<String, String> {
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account)
         .map_err(|e| format!("Keychain entry failed: {}", e))?;
@@ -155,7 +155,7 @@ pub fn dpapi_encrypt(account: &str, plaintext: &str) -> Result<String, String> {
 }
 
 /// Look up a Keychain reference ("keychain:<account>") and return its secret.
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 pub fn dpapi_decrypt(reference: &str) -> Result<String, String> {
     let account = reference.strip_prefix(KEYCHAIN_PREFIX)
         .ok_or_else(|| "not a keychain reference".to_string())?;
@@ -167,7 +167,7 @@ pub fn dpapi_decrypt(reference: &str) -> Result<String, String> {
 /// Encrypt a field value for inline storage in JSON (see module docs for why
 /// `account` must be a stable identifier, e.g. the field's own name).
 /// Returns empty string unchanged (no point storing nothing).
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 pub fn encrypt_field(account: &str, value: &str) -> Result<String, String> {
     if value.is_empty() {
         return Ok(String::new());
@@ -183,7 +183,7 @@ pub fn encrypt_field(account: &str, value: &str) -> Result<String, String> {
 
 /// Decrypt a field value from JSON.
 /// Detects "keychain:" prefix → look up. No prefix → return as-is (plaintext migration).
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 pub fn decrypt_field(value: &str) -> String {
     if value.is_empty() {
         return String::new();

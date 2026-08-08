@@ -145,6 +145,19 @@ tray left-click menu, config paths under `~/Library/Application Support`, final 
 **Exit criteria:** fresh-Mac simulation — new user account on this Mac, install from `.dmg`,
 first-run onboarding, capture, upload, paste all work.
 
+**Known gap to close here, found by review:** `plugins::PluginManager::plugins_dir()` resolves
+to `<exe_dir>/plugins` on every platform (unchanged by this port — same on Windows). Once the
+`.app` bundle is signed and installed to `/Applications`, that directory is inside the read-only,
+signature-sealed bundle: `create_dir_all`/plugin-config writes there will either fail outright or,
+worse, silently succeed on an unsigned dev build while invalidating Gatekeeper's seal on a signed
+one. `dpapi`/settings storage already solves the equivalent problem for logs (`log_file_path` uses
+`%APPDATA%`/`dirs::config_dir()`, not exe-adjacent, specifically for this reason — BUGS#11). Plugin
+discovery needs the same treatment (move to `~/Library/Application Support/ClipToAll/plugins` on
+macOS) — deliberately not fixed as part of the Phase 1.4 executable-bit-filter change, since it's a
+pre-existing cross-platform limitation, not something the port introduced, and changing plugin
+storage location is a bigger, platform-asymmetric decision that deserves its own pass alongside the
+`~/Library/Application Support` config-path work already scheduled for this phase.
+
 ### Phase 6 — CI *(≈ 1–2 days)*
 
 PLAN.md 6.1–6.3: add `macos-14` (arm64) job with `cargo check` + `clippy` on every PR

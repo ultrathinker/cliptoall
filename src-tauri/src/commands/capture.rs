@@ -497,29 +497,25 @@ fn get_monitor_scale(x: i32, y: i32) -> f32 {
 }
 
 /// Retina `backingScaleFactor` (2.0 on Retina, 1.0 on non-Retina) of the
-/// monitor containing a point. `(x, y)` is in the same PHYSICAL-pixel space
-/// as `CaptureData`/`SelectionRect`, but `xcap::Monitor::from_point` expects
-/// LOGICAL points — so this hit-tests manually against each monitor's bounds
-/// scaled up to physical pixels, rather than convert the point (which would
-/// need to know a monitor's scale before knowing which monitor it's on).
-/// Falls back to 1.0 (no downscale) if the point can't be resolved.
+/// monitor a captured point is on. `capture_to_memory` currently captures
+/// only the PRIMARY monitor (§ its own doc comment — multi-monitor capture
+/// is a follow-up), so every point this is ever called with is on that same
+/// monitor — just return its scale directly rather than hit-testing monitor
+/// bounds by point. (An earlier version did a physical-vs-logical bounds
+/// hit-test here; reconstructing physical bounds as `round(logical * scale)`
+/// isn't guaranteed to exactly match the real captured pixel dimensions on
+/// every display, e.g. a non-native "scaled resolution" mode, so a point at
+/// the very edge could match no monitor and silently fall back to 1.0. Once
+/// multi-monitor capture exists, resolve scale properly per-monitor instead
+/// of reintroducing that hit-test.)
 #[cfg(not(windows))]
-fn get_monitor_scale(x: i32, y: i32) -> f32 {
+fn get_monitor_scale(_x: i32, _y: i32) -> f32 {
     let Ok(monitors) = xcap::Monitor::all() else { return 1.0 };
-    for m in &monitors {
-        let (Ok(mx), Ok(my), Ok(mw), Ok(mh), Ok(scale)) =
-            (m.x(), m.y(), m.width(), m.height(), m.scale_factor())
-        else { continue };
-        let scale = scale.max(1.0);
-        let left = (mx as f32 * scale).round() as i32;
-        let top = (my as f32 * scale).round() as i32;
-        let right = left + (mw as f32 * scale).round() as i32;
-        let bottom = top + (mh as f32 * scale).round() as i32;
-        if x >= left && x < right && y >= top && y < bottom {
-            return scale;
-        }
-    }
-    1.0
+    monitors.iter().find(|m| m.is_primary().unwrap_or(false))
+        .or_else(|| monitors.first())
+        .and_then(|m| m.scale_factor().ok())
+        .map(|s| s.max(1.0))
+        .unwrap_or(1.0)
 }
 
 /// Save the editor canvas (PNG base64) as a LOSSLESS PNG working copy. Keeping
