@@ -28,15 +28,44 @@ struct BitmapInfoHeader {
     clr_important: u32,
 }
 
-/// Clear the macOS clipboard. Placeholder until `arboard` lands (PLAN.md 1.1).
+/// Clear the macOS clipboard (NSPasteboard, via arboard).
 #[cfg(not(windows))]
-pub fn clear_clipboard() {}
+pub fn clear_clipboard() {
+    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+        let _ = clipboard.clear();
+    }
+}
 
-/// Placeholder until `arboard::set_image` (NSPasteboard) lands (PLAN.md 1.1).
+/// Copy an image file to the macOS clipboard (NSPasteboard, via arboard).
+/// `output_scale` applies the same DPI downscale used for uploads (when enabled),
+/// so a pasted image matches the logical on-screen size instead of being oversized
+/// on HiDPI captures. The source stays a full-res lossless working copy.
 #[cfg(not(windows))]
 #[tauri::command]
-pub fn copy_image_to_clipboard(_path: String, _output_scale: f32) -> Result<(), String> {
-    Err("copy_image_to_clipboard not yet implemented on macOS".to_string())
+pub fn copy_image_to_clipboard(path: String, output_scale: f32) -> Result<(), String> {
+    // Only ever read the app's own temp screenshot — a compromised WebView must
+    // not be able to copy an arbitrary readable file to the clipboard (BUGS#3).
+    crate::commands::capture::ensure_temp_screenshot_path(&path)?;
+    // Decode image, then apply the output downscale (no-op unless enabled + HiDPI).
+    let img = image::open(&path).map_err(|e| format!("Failed to open image: {}", e))?;
+    let rgb = crate::commands::capture::apply_output_downscale(img.to_rgb8(), output_scale);
+    let width = rgb.width() as usize;
+    let height = rgb.height() as usize;
+
+    // arboard's ImageData wants RGBA8; our working copy has no alpha channel.
+    let rgba = image::DynamicImage::ImageRgb8(rgb).to_rgba8();
+    let image_data = arboard::ImageData {
+        width,
+        height,
+        bytes: std::borrow::Cow::Owned(rgba.into_raw()),
+    };
+
+    let mut clipboard = arboard::Clipboard::new()
+        .map_err(|e| format!("Failed to open clipboard: {}", e))?;
+    clipboard.set_image(image_data)
+        .map_err(|e| format!("set_image failed: {}", e))?;
+
+    Ok(())
 }
 
 /// Clear the Windows clipboard.
