@@ -5,6 +5,7 @@
   import { applyTheme } from '../lib/stores/theme';
   import type { DiscoveredPlugin, PluginConfig } from '../lib/plugin-types';
   import { helpTexts } from '../lib/help-texts';
+  import { showAlert } from '../lib/stores/alert.svelte';
   import '../lib/settings-shared.css';
   import SettingsGeneral from './SettingsGeneral.svelte';
   import SettingsStorage from './SettingsStorage.svelte';
@@ -50,7 +51,7 @@
           if (!plugin) continue;
           if (plugin.settings_format && !cfg.settings?.trim()) {
             activeTab = 'plugins';
-            alert(`Cannot enable "${plugin.name}" — plugin settings are required. Click "Settings" to configure.`);
+            showAlert(`Cannot enable "${plugin.name}" — plugin settings are required. Click "Settings" to configure.`);
             return;
           }
         }
@@ -68,7 +69,7 @@
       applyTheme(localSettings.theme);
       onClose();
     } catch (e) {
-      alert('Failed to save: ' + e);
+      showAlert('Failed to save: ' + e);
     }
   }
 

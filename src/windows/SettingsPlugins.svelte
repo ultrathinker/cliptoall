@@ -7,6 +7,7 @@
   } from '../lib/api';
   import type { DiscoveredPlugin, PluginConfig } from '../lib/plugin-types';
   import { pythonTemplate, csharpTemplate, powershellTemplate, getAiInstructions } from '../lib/plugin-templates';
+  import { showAlert } from '../lib/stores/alert.svelte';
   import '../lib/settings-plugins.css';
 
   // The three fields the parent's handleSave needs are $bindable so they survive
@@ -273,7 +274,7 @@
       scriptEditorPath = plugin.path;
       scriptEditorOpen = true;
     } catch (e) {
-      alert('Failed to read script: ' + e);
+      showAlert('Failed to read script: ' + e);
     }
   }
 
@@ -327,7 +328,7 @@
     try {
       await runScriptInTerminal(plugin.path);
     } catch (e) {
-      alert('Failed to open PowerShell: ' + e);
+      showAlert('Failed to open PowerShell: ' + e);
     }
   }
 
@@ -339,7 +340,7 @@
       pluginConfigs = pluginConfigs.filter(c => c.path !== plugin.path);
       await scanPlugins();
     } catch (e) {
-      alert('Failed to delete: ' + e);
+      showAlert('Failed to delete: ' + e);
     }
   }
 

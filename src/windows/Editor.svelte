@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, flushSync } from 'svelte';
   import { readImageBase64, saveImageBase64, saveImageToFile } from '../lib/api';
+  import { showAlert } from '../lib/stores/alert.svelte';
   import iconPencil from '../assets/icon_pencil.png';
   import iconPencilActive from '../assets/icon_pencil_active.png';
   import iconRect from '../assets/icon_rect.png';
@@ -406,7 +407,7 @@
       if (onSave) onSave(newPath);
     } catch (e) {
       console.error('Failed to save edited image:', e);
-      alert('Failed to save: ' + e);
+      showAlert('Failed to save: ' + e);
     } finally {
       saving = false;
     }
@@ -427,7 +428,7 @@
       }
     } catch (e) {
       console.error('Failed to save file:', e);
-      alert('Failed to save: ' + e);
+      showAlert('Failed to save: ' + e);
     } finally {
       savingFile = false;
     }

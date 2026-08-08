@@ -10,6 +10,7 @@
   import About from './windows/About.svelte';
   import Results from './windows/Results.svelte';
   import Editor from './windows/Editor.svelte';
+  import AlertModal from './lib/AlertModal.svelte';
 
   let currentWindow = $state('loading');
   let isMainWindow = false;
@@ -169,3 +170,4 @@
     <Editor imagePath={currentImagePath()} outputScale={session.outputScale} onSave={handleEditorSave} onCancel={handleEditorCancel} />
   {/if}
 </main>
+<AlertModal />

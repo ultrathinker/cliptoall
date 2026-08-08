@@ -1,6 +1,7 @@
 <script lang="ts">
   import { gdriveAuthorize, gdriveDisconnect } from '../lib/api';
   import type { AppSettings } from '../lib/stores/settings';
+  import { showAlert } from '../lib/stores/alert.svelte';
   import '../lib/settings-storage.css';
 
   // gdriveConnected/gdriveEmail are owned by the parent so they persist for the
@@ -25,7 +26,7 @@
       gdriveEmail = await gdriveAuthorize();
       gdriveConnected = true;
     } catch (e) {
-      alert('Failed to connect: ' + e);
+      showAlert('Failed to connect: ' + e);
     }
   }
 
@@ -35,7 +36,7 @@
       gdriveConnected = false;
       gdriveEmail = '';
     } catch (e) {
-      alert('Failed to disconnect: ' + e);
+      showAlert('Failed to disconnect: ' + e);
     }
   }
 </script>
