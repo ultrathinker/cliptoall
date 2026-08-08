@@ -79,8 +79,11 @@ PLAN.md 1.1–1.5. Suggested sub-order (independent, but this sequencing tests e
 
 1. **1.2 Secrets** — re-add `keyring` (Keychain). Verify: save creds in Settings → restart →
    creds survive; `security find-generic-password` shows the item.
-2. **1.3 Autostart** — prefer `tauri-plugin-autostart` over a hand-rolled LaunchAgent plist
-   (less code to own); fall back to plist only if the plugin fights with the tray-only app.
+2. **1.3 Autostart** — ~~prefer `tauri-plugin-autostart`~~ done as a hand-rolled LaunchAgent
+   plist instead: `set_autorun` is called from deep in the settings-save path with no
+   `AppHandle` in scope (the plugin's enable/disable need one via `ManagerExt`), and threading
+   one through just for this touches unrelated call sites. A plist write + `launchctl
+   load`/`unload` needs no handle at all.
 3. **1.1 Clipboard image** — `arboard::set_image`. Verify: paste into Preview, a browser,
    and Slack.
 4. **1.4/1.5 Plugin discovery + encryption-plugin** — executable-bit filter; cfg-gate

@@ -50,12 +50,30 @@ fn functions() -> Vec<Function> {
 
 // ── Clipboard helpers ───────────────────────────────────────────
 
+#[cfg(windows)]
 fn read_clipboard() -> Result<String, String> {
     clipboard_win::get_clipboard_string().map_err(|e| format!("Failed to read clipboard: {}", e))
 }
 
+#[cfg(windows)]
 fn write_clipboard(text: &str) -> Result<(), String> {
     clipboard_win::set_clipboard_string(text)
+        .map_err(|e| format!("Failed to write clipboard: {}", e))
+}
+
+#[cfg(not(windows))]
+fn read_clipboard() -> Result<String, String> {
+    arboard::Clipboard::new()
+        .map_err(|e| format!("Failed to open clipboard: {}", e))?
+        .get_text()
+        .map_err(|e| format!("Failed to read clipboard: {}", e))
+}
+
+#[cfg(not(windows))]
+fn write_clipboard(text: &str) -> Result<(), String> {
+    arboard::Clipboard::new()
+        .map_err(|e| format!("Failed to open clipboard: {}", e))?
+        .set_text(text)
         .map_err(|e| format!("Failed to write clipboard: {}", e))
 }
 
