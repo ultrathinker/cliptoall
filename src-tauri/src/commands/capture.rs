@@ -298,10 +298,46 @@ pub fn cleanup_temp_files() {
     }
 }
 
-/// Placeholder until the `xcap`-based capture lands (PLAN.md Phase 2).
+/// Capture the primary monitor to memory via `xcap` (CoreGraphics under the
+/// hood). Windows' `capture_to_memory` grabs the whole virtual screen (every
+/// monitor in one buffer, via `SM_CXVIRTUALSCREEN`); this captures only the
+/// PRIMARY monitor for now — proper multi-monitor compositing is a follow-up
+/// (PLAN.md Phase 2.1 flags evaluating multi-monitor before committing to an
+/// approach), so a selection dragged onto a second display will misbehave
+/// until then.
 #[cfg(not(windows))]
 pub fn capture_to_memory() -> Result<CaptureData, String> {
-    Err("capture_to_memory not yet implemented on macOS".to_string())
+    use std::time::Instant;
+    let t0 = Instant::now();
+
+    let monitors = xcap::Monitor::all().map_err(|e| format!("Monitor::all failed: {}", e))?;
+    let monitor = monitors.iter().find(|m| m.is_primary().unwrap_or(false))
+        .or_else(|| monitors.first())
+        .ok_or_else(|| "No monitor found".to_string())?;
+
+    // xcap reports x/y/width/height in LOGICAL points (NSScreen convention);
+    // capture_image() returns PHYSICAL pixels. CaptureData.left/top must be
+    // in the SAME physical-pixel space as the buffer (crop math and
+    // get_monitor_scale below both assume that), so scale them up front.
+    let scale = monitor.scale_factor().unwrap_or(1.0).max(1.0);
+    let left = (monitor.x().map_err(|e| format!("Monitor::x failed: {}", e))? as f32 * scale).round() as i32;
+    let top = (monitor.y().map_err(|e| format!("Monitor::y failed: {}", e))? as f32 * scale).round() as i32;
+
+    let img = monitor.capture_image().map_err(|e| format!("capture_image failed: {}", e))?;
+    let width = img.width() as i32;
+    let height = img.height() as i32;
+    crate::log(&format!("    [capture] xcap monitor={}x{} at ({},{}) | +{}ms", width, height, left, top, t0.elapsed().as_millis()));
+
+    // xcap hands back RGBA (image crate convention); CaptureData is documented
+    // and consumed (crop_and_save_from_buffer) as BGRA, matching what Windows'
+    // GDI path naturally produces — swap R/B per pixel to conform.
+    let mut buffer = Vec::with_capacity(img.as_raw().len());
+    for px in img.as_raw().chunks_exact(4) {
+        buffer.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
+    }
+
+    crate::log(&format!("    [capture] capture_to_memory done | +{}ms", t0.elapsed().as_millis()));
+    Ok(CaptureData { buffer, width, height, left, top })
 }
 
 /// Capture the screen to memory (no file I/O). Used by native overlay.
@@ -460,11 +496,29 @@ fn get_monitor_scale(x: i32, y: i32) -> f32 {
     }
 }
 
-/// Placeholder until Retina `backingScaleFactor` detection lands (PLAN.md
-/// Phase 2.2). Returning 1.0 means output stays full-resolution (no downscale)
-/// until then.
+/// Retina `backingScaleFactor` (2.0 on Retina, 1.0 on non-Retina) of the
+/// monitor containing a point. `(x, y)` is in the same PHYSICAL-pixel space
+/// as `CaptureData`/`SelectionRect`, but `xcap::Monitor::from_point` expects
+/// LOGICAL points — so this hit-tests manually against each monitor's bounds
+/// scaled up to physical pixels, rather than convert the point (which would
+/// need to know a monitor's scale before knowing which monitor it's on).
+/// Falls back to 1.0 (no downscale) if the point can't be resolved.
 #[cfg(not(windows))]
-fn get_monitor_scale(_x: i32, _y: i32) -> f32 {
+fn get_monitor_scale(x: i32, y: i32) -> f32 {
+    let Ok(monitors) = xcap::Monitor::all() else { return 1.0 };
+    for m in &monitors {
+        let (Ok(mx), Ok(my), Ok(mw), Ok(mh), Ok(scale)) =
+            (m.x(), m.y(), m.width(), m.height(), m.scale_factor())
+        else { continue };
+        let scale = scale.max(1.0);
+        let left = (mx as f32 * scale).round() as i32;
+        let top = (my as f32 * scale).round() as i32;
+        let right = left + (mw as f32 * scale).round() as i32;
+        let bottom = top + (mh as f32 * scale).round() as i32;
+        if x >= left && x < right && y >= top && y < bottom {
+            return scale;
+        }
+    }
     1.0
 }
 

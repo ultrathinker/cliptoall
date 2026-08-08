@@ -41,3 +41,4 @@ keyring = { version = "3", default-features = false, features = ["apple-native"]
 
 [target."cfg(not(windows))".dependencies]
 arboard = "3.6.1"
+xcap = "0.9.8"
