@@ -1,7 +1,16 @@
-//! Windows DPAPI encryption helpers.
+//! Encrypted secret storage.
 //!
-//! Uses CryptProtectData / CryptUnprotectData (CurrentUser scope)
-//! to encrypt sensitive data. Only the same Windows user can decrypt.
+//! Windows: DPAPI (CryptProtectData/CryptUnprotectData, CurrentUser scope)
+//! encrypts an arbitrary blob with a system key and returns self-contained
+//! ciphertext — no external state, so callers pass no identifier.
+//!
+//! macOS: the Keychain is a service+account key-value store, not a blob
+//! cipher, so each secret needs a STABLE account name. "Encrypt" stores the
+//! plaintext under that account and returns a small opaque reference
+//! ("keychain:<account>") to embed inline where DPAPI ciphertext used to go;
+//! "decrypt" looks the account back up. The account must be stable across
+//! saves (not a fresh UUID per call) or every settings save would leak a new
+//! orphaned Keychain entry (PLAN.md Phase 1.2).
 
 #[cfg(windows)]
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
@@ -26,8 +35,9 @@ unsafe fn free_dpapi_blob(ptr: *mut u8) {
 const DPAPI_PREFIX: &str = "dpapi:";
 
 /// Encrypt a string using Windows DPAPI (CurrentUser scope), return base64.
+/// `_account` is unused on Windows — DPAPI ciphertext is self-contained.
 #[cfg(windows)]
-pub fn dpapi_encrypt(plaintext: &str) -> Result<String, String> {
+pub fn dpapi_encrypt(_account: &str, plaintext: &str) -> Result<String, String> {
     unsafe {
         let input_bytes = plaintext.as_bytes();
         let input_blob = CRYPT_INTEGER_BLOB {
@@ -86,11 +96,11 @@ pub fn dpapi_decrypt(encrypted_b64: &str) -> Result<String, String> {
 /// Prepends "dpapi:" prefix so the value can be identified as encrypted.
 /// Returns empty string unchanged (no point encrypting nothing).
 #[cfg(windows)]
-pub fn encrypt_field(value: &str) -> Result<String, String> {
+pub fn encrypt_field(account: &str, value: &str) -> Result<String, String> {
     if value.is_empty() {
         return Ok(String::new());
     }
-    match dpapi_encrypt(value) {
+    match dpapi_encrypt(account, value) {
         Ok(encrypted) => Ok(format!("{}{}", DPAPI_PREFIX, encrypted)),
         Err(e) => {
             crate::log(&format!("dpapi: encrypt_field failed: {}", e));
@@ -120,28 +130,74 @@ pub fn decrypt_field(value: &str) -> String {
     }
 }
 
-/// Placeholder until Keychain-backed encryption lands (PLAN.md Phase 1.2).
+// ── macOS: Keychain-backed store ────────────────────────────────
+
+/// Service name all ClipToAll Keychain entries are filed under (visible in
+/// Keychain Access.app as the entries' "Where" column).
 #[cfg(not(windows))]
-pub fn dpapi_encrypt(_plaintext: &str) -> Result<String, String> {
-    Err("dpapi_encrypt not yet implemented on macOS".to_string())
+const KEYCHAIN_SERVICE: &str = "ClipToAll";
+
+/// Prefix for Keychain-backed fields stored inline in JSON — analogous to
+/// Windows' "dpapi:" prefix, but the payload is an account name, not ciphertext.
+#[cfg(not(windows))]
+const KEYCHAIN_PREFIX: &str = "keychain:";
+
+/// Store `plaintext` in the Keychain under `account` (stable — a re-save
+/// overwrites the same entry instead of leaking a new one), return the
+/// opaque reference to embed inline in JSON.
+#[cfg(not(windows))]
+pub fn dpapi_encrypt(account: &str, plaintext: &str) -> Result<String, String> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account)
+        .map_err(|e| format!("Keychain entry failed: {}", e))?;
+    entry.set_password(plaintext)
+        .map_err(|e| format!("Keychain set_password failed: {}", e))?;
+    Ok(format!("{}{}", KEYCHAIN_PREFIX, account))
 }
 
-/// Placeholder until Keychain-backed encryption lands (PLAN.md Phase 1.2).
+/// Look up a Keychain reference ("keychain:<account>") and return its secret.
 #[cfg(not(windows))]
-pub fn dpapi_decrypt(_encrypted_b64: &str) -> Result<String, String> {
-    Err("dpapi_decrypt not yet implemented on macOS".to_string())
+pub fn dpapi_decrypt(reference: &str) -> Result<String, String> {
+    let account = reference.strip_prefix(KEYCHAIN_PREFIX)
+        .ok_or_else(|| "not a keychain reference".to_string())?;
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account)
+        .map_err(|e| format!("Keychain entry failed: {}", e))?;
+    entry.get_password().map_err(|e| format!("Keychain get_password failed: {}", e))
 }
 
-/// Placeholder until Keychain-backed encryption lands (PLAN.md Phase 1.2) —
-/// same `encrypt_field`/`decrypt_field` interface, no migration from DPAPI.
+/// Encrypt a field value for inline storage in JSON (see module docs for why
+/// `account` must be a stable identifier, e.g. the field's own name).
+/// Returns empty string unchanged (no point storing nothing).
 #[cfg(not(windows))]
-pub fn encrypt_field(_value: &str) -> Result<String, String> {
-    Err("encrypt_field not yet implemented on macOS".to_string())
+pub fn encrypt_field(account: &str, value: &str) -> Result<String, String> {
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+    match dpapi_encrypt(account, value) {
+        Ok(reference) => Ok(reference),
+        Err(e) => {
+            crate::log(&format!("keychain: encrypt_field failed: {}", e));
+            Err(e)
+        }
+    }
 }
 
+/// Decrypt a field value from JSON.
+/// Detects "keychain:" prefix → look up. No prefix → return as-is (plaintext migration).
 #[cfg(not(windows))]
 pub fn decrypt_field(value: &str) -> String {
-    // No encrypted-storage backend yet: pass through unchanged (matches the
-    // Windows "no prefix -> plaintext" fallback) rather than losing the value.
-    value.to_string()
+    if value.is_empty() {
+        return String::new();
+    }
+    if value.starts_with(KEYCHAIN_PREFIX) {
+        match dpapi_decrypt(value) {
+            Ok(decrypted) => decrypted,
+            Err(e) => {
+                crate::log(&format!("keychain: decrypt_field failed: {}", e));
+                String::new() // corrupted/missing — return empty, user will need to re-enter
+            }
+        }
+    } else {
+        // No prefix — plaintext (pre-encryption migration), return as-is
+        value.to_string()
+    }
 }

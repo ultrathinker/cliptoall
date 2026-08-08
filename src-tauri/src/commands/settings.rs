@@ -317,9 +317,9 @@ fn save_settings_to_disk_locked(settings: AppSettings) -> Result<(), String> {
     // Encrypt sensitive fields before writing to disk (keep `settings` plaintext
     // for the cache).
     let mut to_save = settings.clone();
-    to_save.amazon_access_key_id = crate::utils::dpapi::encrypt_field(&to_save.amazon_access_key_id)
+    to_save.amazon_access_key_id = crate::utils::dpapi::encrypt_field("amazon_access_key_id", &to_save.amazon_access_key_id)
         .map_err(|e| format!("Failed to encrypt Amazon access key: {}", e))?;
-    to_save.amazon_secret_access_key = crate::utils::dpapi::encrypt_field(&to_save.amazon_secret_access_key)
+    to_save.amazon_secret_access_key = crate::utils::dpapi::encrypt_field("amazon_secret_access_key", &to_save.amazon_secret_access_key)
         .map_err(|e| format!("Failed to encrypt Amazon secret key: {}", e))?;
 
     let path = get_settings_path();

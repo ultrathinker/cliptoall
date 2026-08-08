@@ -379,7 +379,8 @@ fn save_plugin_configs(configs: Vec<PluginConfig>) -> Result<(), String> {
     // Encrypt settings before writing to disk
     let encrypted_configs: Vec<PluginConfig> = configs.into_iter().map(|mut cfg| {
         if !cfg.settings.is_empty() {
-            cfg.settings = crate::utils::dpapi::dpapi_encrypt(&cfg.settings)
+            let account = format!("plugin_settings:{}", cfg.path);
+            cfg.settings = crate::utils::dpapi::dpapi_encrypt(&account, &cfg.settings)
                 .map_err(|e| {
                     format!("Failed to encrypt plugin settings for '{}': {}", cfg.path, e)
                 })?;

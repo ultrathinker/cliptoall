@@ -200,7 +200,7 @@ fn save_token_to_disk(token: &SavedToken) -> Result<(), String> {
     let path = get_token_path();
     let json = serde_json::to_string_pretty(token)
         .map_err(|e| format!("Failed to serialize gdrive token: {}", e))?;
-    let encrypted = crate::utils::dpapi::dpapi_encrypt(&json)
+    let encrypted = crate::utils::dpapi::dpapi_encrypt("gdrive_token", &json)
         .map_err(|e| format!("Failed to encrypt gdrive token: {}", e))?;
     // Atomic write so a crash mid-write can't corrupt the stored token (which
     // would force a reconnect) — see utils::fs::atomic_write.
