@@ -638,6 +638,34 @@ fn open_system_settings(url: String) -> Result<(), String> {
     }
 }
 
+/// Bring up the Settings window on a given tab.
+///
+/// Exists as a command rather than an `emit` from the frontend on purpose: the
+/// Results/Editor windows are denied `core:event:default` precisely so a
+/// compromised one cannot broadcast events at the main window (see the
+/// description in capabilities/results.json). Routing through Rust keeps that
+/// property — the payload is a tab name this function validates, not an
+/// arbitrary event.
+#[tauri::command]
+fn open_settings_tab(app: AppHandle, tab: String) -> Result<(), String> {
+    // Whitelist rather than pass through: the frontend switches on this value,
+    // and an unknown tab would leave the Settings window on a blank pane.
+    let tab = match tab.as_str() {
+        "general" | "storage" => tab,
+        #[cfg(windows)]
+        "plugins" => tab,
+        other => return Err(format!("unknown settings tab: {}", other)),
+    };
+    let main = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    let _ = main.unminimize();
+    main.show().map_err(|e| e.to_string())?;
+    main.set_focus().map_err(|e| e.to_string())?;
+    main.emit("show-settings", serde_json::json!({ "tab": tab }))
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn get_pending_image(window: tauri::Window, state: tauri::State<'_, PendingResults>) -> Option<PendingImageResult> {
     // Non-destructive read: the entry is removed when the window is destroyed
@@ -1135,6 +1163,8 @@ fn main() {
             commands::capture::save_image_to_file,
             #[cfg(target_os = "macos")]
             commands::capture::save_image_to_path,
+            #[cfg(target_os = "macos")]
+            commands::ocr::recognize_text,
             commands::upload_s3::upload_to_s3,
             commands::upload_gdrive::gdrive_authorize,
             commands::upload_gdrive::gdrive_upload_pooled,
@@ -1143,6 +1173,7 @@ fn main() {
             commands::clipboard::copy_image_to_clipboard,
             commands::settings::save_results_window_size,
             get_pending_image,
+            open_settings_tab,
             #[cfg(target_os = "macos")]
             open_system_settings,
             setup_editor_window,

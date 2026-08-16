@@ -248,7 +248,7 @@ pub async fn get_valid_token() -> Result<String, String> {
     ensure_loaded();
 
     let token = GDRIVE_TOKEN.lock().clone()
-        .ok_or("Not authorized. Please connect to Google Drive.")?;
+        .ok_or("Not authorized.")?;
 
     // Fast path: still valid with >60s of headroom.
     if now_secs() + 60 < token.expires_at {
@@ -261,7 +261,7 @@ pub async fn get_valid_token() -> Result<String, String> {
 
     // Re-check under the gate: another task may have refreshed while we waited.
     let token = GDRIVE_TOKEN.lock().clone()
-        .ok_or("Not authorized. Please connect to Google Drive.")?;
+        .ok_or("Not authorized.")?;
     if now_secs() + 60 < token.expires_at {
         return Ok(token.access_token);
     }

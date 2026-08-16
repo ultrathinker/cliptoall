@@ -1,11 +1,11 @@
 <script lang="ts">
   import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
   import { openUrl } from '@tauri-apps/plugin-opener';
-  import { saveResultsWindowSize, readImageBase64, copyImageToClipboard } from '../lib/api';
+  import { saveResultsWindowSize, readImageBase64, copyImageToClipboard, recognizeText, openSettingsTab } from '../lib/api';
   import { writeText } from '@tauri-apps/plugin-clipboard-manager';
   import { settings } from '../lib/stores/settings';
   import { session, startUpload, copyLink, currentImagePath } from '../lib/stores/session.svelte';
-  import { displayHotkey } from '../lib/platform';
+  import { displayHotkey, IS_MAC } from '../lib/platform';
   import { onMount, onDestroy, tick } from 'svelte';
 
   let { onEdit }: { onEdit?: () => void } = $props();
@@ -31,6 +31,14 @@
   let showErrorPopup = $state(false);
   let copyLinkLabel = $state('Copy link');
   let copyImageLabel = $state('Copy image');
+  /// On-device OCR — macOS only. The Rust side invokes Vision's
+  /// VNRecognizeTextRequest off-thread; we track the in-flight state here so
+  /// the button can show its spinner. Three terminal states map to three
+  /// short confirmation strings the user can read in-place, matching how
+  /// "Copy link" already handles success/failure (mx-ocr brief §Frontend).
+  let copyTextLabel = $state('Copy text');
+  let copyTextRunning = $state(false);
+  let copyTextResetTimer: number | undefined;
 
   // ── Derived view state (single source of truth = session store) ──────
   let uploading = $derived(session.status === 'uploading');
@@ -48,6 +56,11 @@
 
   const ERROR_MAX = 150;
   let shortError = $derived(uploadError.length > ERROR_MAX ? uploadError.slice(0, ERROR_MAX) + '...' : uploadError);
+  // Matches the message raised by upload_gdrive.rs when there is no stored
+  // token ("Not authorized. Please connect to Google Drive."). Matching on text
+  // is fragile, so keep it loose — a missed match costs the shortcut, not
+  // correctness, and the full error is still shown either way.
+  let needsGoogleAuth = $derived(/not authorized/i.test(uploadError));
 
   // Primary action button (label + whether it re-uploads or just copies).
   let primaryLabel = $derived(
@@ -136,6 +149,7 @@
     mounted = false;
     if (intervalId) clearInterval(intervalId);
     if (resizeSaveTimer) clearTimeout(resizeSaveTimer);
+    if (copyTextResetTimer) clearTimeout(copyTextResetTimer);
     if (unlistenResize) unlistenResize();
     contentObserver?.disconnect();
     window.removeEventListener('keydown', handleKeydown);
@@ -198,6 +212,48 @@
     }
   }
 
+  /// On-device OCR (macOS only). Reads recognised text off the current
+  /// capture via `recognize_text` (Apple Vision under the hood), then puts
+  /// the result on the clipboard. Empty result is treated as "no text
+  /// found" and surfaced in-place rather than overwriting the clipboard
+  /// with a stray empty string — the brief is explicit about this.
+  async function copyText() {
+    if (copyTextRunning) return; // ignore re-entry while recognition is in flight
+    const path = currentImagePath();
+    if (!path) return;
+    copyTextRunning = true;
+    copyTextLabel = 'Reading text…';
+    try {
+      const text = await recognizeText(path);
+      if (!mounted) return;
+      if (text.length === 0) {
+        // Normal outcome for screenshots that contain no copyable text.
+        // Don't copy — that would clobber the user's clipboard with
+        // nothing — and say so plainly for ~2 seconds so the user can
+        // tell what happened without checking the console.
+        copyTextLabel = 'No text found';
+        scheduleCopyTextReset('Copy text', 2000);
+        return;
+      }
+      await writeText(text);
+      if (!mounted) return;
+      copyTextLabel = 'Copied';
+      scheduleCopyTextReset('Copy text', 1500);
+    } catch (e) {
+      console.error('Copy text failed:', e);
+      if (!mounted) return;
+      copyTextLabel = 'Copy failed';
+      scheduleCopyTextReset('Copy text', 1500);
+    } finally {
+      copyTextRunning = false;
+    }
+  }
+
+  function scheduleCopyTextReset(label: string, ms: number) {
+    if (copyTextResetTimer) clearTimeout(copyTextResetTimer);
+    copyTextResetTimer = setTimeout(() => { copyTextLabel = label; }, ms);
+  }
+
   async function openInBrowser() {
     if (session.url) await openUrl(session.url);
   }
@@ -208,11 +264,6 @@
 
   async function searchTineye() {
     if (session.url) await openUrl(`https://tineye.com/search?url=${encodeURIComponent(session.url)}`);
-  }
-
-  async function searchEverywhere() {
-    await searchGoogle();
-    await searchTineye();
   }
 
   function toggleAutoclose() {
@@ -313,7 +364,12 @@
                 <span class="status-icon error">&#x2716;</span>
                 <span class="status-text error-text">
                   {shortError}
-                  {#if uploadError.length > ERROR_MAX}
+                  {#if needsGoogleAuth}
+                    <!-- An unauthorized upload is the one error the user can
+                         actually fix, and the fix is three clicks away in a
+                         window they have to know exists. Take them there. -->
+                    <button type="button" class="more-link" onclick={() => openSettingsTab('storage')}>Connect Google Drive</button>
+                  {:else if uploadError.length > ERROR_MAX}
                     <button type="button" class="more-link" onclick={() => showErrorPopup = true}>more</button>
                   {/if}
                 </span>
@@ -334,7 +390,23 @@
             <div class="search-buttons">
               <button class="btn-default" disabled={!linkFetchable} onclick={searchGoogle}>Google</button>
               <button class="btn-default" disabled={!linkFetchable} onclick={searchTineye}>Tineye</button>
-              <button class="btn-default" disabled={!linkFetchable} onclick={searchEverywhere}>Search both</button>
+              {#if IS_MAC}
+                <!-- macOS-only: on-device OCR via Apple's Vision framework (see
+                     src-tauri/src/commands/ocr.rs). Sits where "Search both"
+                     used to: that button only did what the two beside it
+                     already do. Unlike them it needs no uploaded link — the
+                     recognition runs on the local capture — so it is not
+                     gated on `linkFetchable`. The .spinner is the same one
+                     Show uses while the GDrive pool's background PATCH lands. -->
+                <button
+                  class="btn-default"
+                  disabled={copyTextRunning}
+                  onclick={copyText}
+                  title="Read the text in this image with on-device OCR and put it on the clipboard"
+                >
+                  {#if copyTextRunning}<span class="spinner" aria-hidden="true"></span>{/if}{copyTextLabel}
+                </button>
+              {/if}
             </div>
             <label class="autoclose-label">
               <input type="checkbox" checked={autoCloseEnabled} onchange={toggleAutoclose} />

@@ -7,5 +7,13 @@ fn main() {
     #[cfg(target_os = "macos")]
     println!("cargo:rustc-link-lib=framework=ServiceManagement");
 
+    // Vision framework — used by commands/ocr.rs (`recognize_text`,
+    // `VNRecognizeTextRequest`). Same rationale as ServiceManagement: the
+    // objc2-vision crate does not emit a framework link directive, and the
+    // framework is OS-supplied (no entitlement, no per-use cost). Vision
+    // ships in macOS 10.15+; our floor is 14.
+    #[cfg(target_os = "macos")]
+    println!("cargo:rustc-link-lib=framework=Vision");
+
     tauri_build::build()
 }

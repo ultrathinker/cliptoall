@@ -15,7 +15,17 @@
   import SettingsStorage from './SettingsStorage.svelte';
   import SettingsPlugins from './SettingsPlugins.svelte';
 
-  let { onClose }: { onClose: () => void } = $props();
+  // `initialTab` lets a caller elsewhere in the app land the user on the right
+  // pane — e.g. the "Connect Google Drive" link shown on an upload
+  // authorization error opens Settings straight on Storage.
+  // `tabRequest` lets a caller elsewhere in the app land the user on the right
+  // pane — e.g. the "Connect Google Drive" link shown on an upload
+  // authorization error opens Settings straight on Storage. The `seq` makes
+  // repeat requests distinct so they still switch a window that is already open.
+  let { onClose, tabRequest }: {
+    onClose: () => void;
+    tabRequest?: { tab: 'general' | 'storage'; seq: number };
+  } = $props();
 
   let localSettings: AppSettings = $state({ ...$settings });
   let originalTheme = $state($settings.theme);
@@ -26,6 +36,12 @@
   // gate, so the value can never be 'plugins' on the store build (no user
   // input reaches it).
   let activeTab = $state<'general' | 'storage' | 'plugins'>('general');
+
+  // Follow every request, not just the first. Reruns only when `seq` changes,
+  // so a tab the user picked by hand is never yanked out from under them.
+  $effect(() => {
+    if (tabRequest && tabRequest.seq > 0) activeTab = tabRequest.tab;
+  });
 
   // ── Plugin state owned here so it survives the Plugins tab unmounting ──
   // (SettingsPlugins binds these; handleSave reads them for validation + save.)

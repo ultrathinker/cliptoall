@@ -2,6 +2,6 @@
   "$schema": "gen/schemas/macOS-schema.json",
   "bundle": {
     "targets": ["app", "dmg"],
-    "icon": ["icons/icon.icns", "icons/ClipToAll-32x32.png"]
+    "icon": ["icons/icon.icns", "icons/icon.png"]
   }
 }

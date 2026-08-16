@@ -92,3 +92,17 @@ export const precompileScript = (path: string) => invoke<string>('precompile_scr
 // only http/https, and the plugin spawns `open`, which the sandbox forbids.
 export const openSystemSettings = (url: string) =>
   invoke<void>('open_system_settings', { url });
+
+// macOS: on-device OCR via Apple's Vision framework (VNRecognizeTextRequest).
+// Returns the joined recognised text, or an empty string when no text was
+// found. The path is validated server-side (`ensure_temp_screenshot_path`),
+// so a hostile caller cannot point it at arbitrary files — the same
+// guarantee every other path-taking command gives.
+export const recognizeText = (imagePath: string) =>
+  invoke<string>('recognize_text', { imagePath });
+
+// Open the Settings window on a given tab. Goes through Rust because the
+// Results/Editor windows are deliberately denied the ability to emit events
+// (see capabilities/results.json) — this keeps that restriction intact.
+export const openSettingsTab = (tab: 'general' | 'storage') =>
+  invoke<void>('open_settings_tab', { tab });

@@ -15,6 +15,11 @@
   import AlertModal from './lib/AlertModal.svelte';
 
   let currentWindow = $state('loading');
+  /// Which tab the Settings window should show. Carries a sequence number so
+  /// each request is a distinct value: without it, asking for Storage twice in
+  /// a row would not re-trigger anything, and a Settings window the user had
+  /// meanwhile switched back to General would ignore the second request.
+  let settingsTab = $state<{ tab: 'general' | 'storage'; seq: number }>({ tab: 'general', seq: 0 });
   let isMainWindow = false;
 
   async function showWindow(name: string, width: number, height: number, minWidth?: number, minHeight?: number, resizable = true) {
@@ -150,7 +155,15 @@
       // Main window — tray app, settings, about
       currentWindow = 'main';
 
-      listen('show-settings', async () => {
+      // Payload is optional: the tray menu emits it bare, `open_settings_tab`
+      // emits { tab } so a caller elsewhere in the app can land the user on
+      // the right pane (e.g. the "Connect Google Drive" link on an upload
+      // authorization error).
+      listen<{ tab?: string } | null>('show-settings', async (event) => {
+        settingsTab = {
+          tab: event.payload?.tab === 'storage' ? 'storage' : 'general',
+          seq: settingsTab.seq + 1,
+        };
         if (currentWindow === 'settings') {
           const win = getCurrentWindow();
           await win.unminimize();
@@ -249,7 +262,7 @@
   style="background: {currentWindow === 'overlay' ? 'rgb(40, 38, 42)' : 'var(--bg-base)'}; color: var(--text-main);"
 >
   {#if currentWindow === 'settings'}
-    <Settings onClose={handleClose} />
+    <Settings onClose={handleClose} tabRequest={settingsTab} />
   {:else if currentWindow === 'about'}
     <About onClose={handleClose} />
   {:else if currentWindow === 'results'}

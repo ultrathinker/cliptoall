@@ -77,10 +77,27 @@ objc2-screen-capture-kit = { version = "0.3", default-features = true, features 
 # is NOT the same as being usable" — anything we name in code must be declared
 # explicitly under the same target gate.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSArray", "NSError", "NSString", "NSURL"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSDictionary", "NSError", "NSString", "NSURL"] }
 objc2-core-graphics = { version = "0.3", features = ["CGImage", "CGColorSpace", "CGContext", "CGDataProvider", "CGDirectDisplay", "CGWindow"] }
 objc2-core-foundation = { version = "0.3", features = ["CFCGTypes"] }
 block2 = "0.6"
+# Apple's Vision framework — VNRecognizeTextRequest. The crate ships with all
+# sub-frameworks on by default, which drags in objc2-core-image / objc2-image-io
+# / objc2-av-foundation / objc2-core-media / objc2-core-ml and dozens of Vision
+# request types we never touch. We opt out of defaults and list only what the
+# "Copy text" feature actually calls into: VNRecognizeTextRequest, VNObservation
+# (VNRecognizedText + VNRecognizedTextObservation inherit from it), VNRequest
+# (the performRequests:error: target type), VNRequestHandler
+# (VNImageRequestHandler is gated behind this), and the enum VNRequestTextRecognitionLevel.
+# Vision is part of the OS — no entitlement, no per-use cost, fully on-device.
+objc2-vision = { version = "0.3", default-features = false, features = [
+    "VNRecognizeTextRequest",
+    "VNObservation",
+    "VNRequest",
+    "VNRequestHandler",
+    "std",
+    "alloc",
+] }
 
 [target."cfg(not(windows))".dependencies]
 arboard = "3.6.1"

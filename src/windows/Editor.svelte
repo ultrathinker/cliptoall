@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, flushSync } from 'svelte';
-  import { readImageBase64, saveImageBase64, saveImageToFile, saveImageToPath } from '../lib/api';
+  import { readImageBase64, saveImageBase64, saveImageToFile, saveImageToPath, recognizeText } from '../lib/api';
+  import { writeText } from '@tauri-apps/plugin-clipboard-manager';
   import { save as showSaveDialog } from '@tauri-apps/plugin-dialog';
   import { showAlert } from '../lib/stores/alert.svelte';
   import { IS_MAC } from '../lib/platform';
@@ -415,6 +416,50 @@
     }
   }
 
+  // ── Copy text (macOS on-device OCR) ────────────────────────────────────
+  //
+  // Reads the CURRENT canvas, not the file the editor opened, so a crop or an
+  // added text annotation is what gets recognised — "the text I can see right
+  // now" is what the button promises. That costs one PNG encode per press,
+  // the same one `save()` and `saveAsFile()` already pay.
+  //
+  // Deliberately does NOT close the editor: copying text is not the end of an
+  // edit, and the user keeps working afterwards.
+  let copyTextLabel = $state('Copy text');
+  let copyTextRunning = $state(false);
+  let copyTextResetTimer: number | undefined;
+
+  function scheduleCopyTextReset(label: string, ms: number) {
+    if (copyTextResetTimer) clearTimeout(copyTextResetTimer);
+    copyTextResetTimer = setTimeout(() => { copyTextLabel = label; }, ms);
+  }
+
+  async function copyText() {
+    if (copyTextRunning) return;
+    copyTextRunning = true;
+    copyTextLabel = 'Reading…';
+    try {
+      const dataUrl = canvas.toDataURL('image/png');
+      const base64 = dataUrl.replace(/^data:image\/png;base64,/, '');
+      const tempPath = await saveImageBase64(base64);
+      const text = await recognizeText(tempPath);
+      if (!text.trim()) {
+        copyTextLabel = 'No text found';
+        scheduleCopyTextReset('Copy text', 2000);
+        return;
+      }
+      await writeText(text);
+      copyTextLabel = 'Copied';
+      scheduleCopyTextReset('Copy text', 1500);
+    } catch (e) {
+      console.error('Copy text failed:', e);
+      copyTextLabel = 'Failed';
+      scheduleCopyTextReset('Copy text', 1500);
+    } finally {
+      copyTextRunning = false;
+    }
+  }
+
   let savingFile = $state(false);
 
   async function saveAsFile() {
@@ -470,6 +515,20 @@
 
 <div class="editor-page">
   <div class="toolbar">
+    {#if IS_MAC}
+      <!-- Left-aligned on its own, away from the drawing tools: it is not a
+           tool, it takes nothing from the canvas and changes nothing on it.
+           `margin-right: auto` does the separating — the toolbar itself stays
+           justify-content: flex-end so every real tool keeps its position. -->
+      <button
+        class="copy-text-btn"
+        disabled={copyTextRunning}
+        onclick={copyText}
+        title="Read the text in this image with on-device OCR and put it on the clipboard"
+      >
+        {copyTextLabel}
+      </button>
+    {/if}
     <button
       class="tool-btn text-btn"
       class:active={tool === 'text'}
@@ -620,6 +679,30 @@
     background: rgb(225, 225, 225);
     border-bottom: 1px solid rgb(180, 180, 180);
     flex-shrink: 0;
+  }
+
+  /* Pushes everything after it to the right edge, so this button sits alone
+     on the left while the toolbar keeps its flex-end alignment. */
+  .copy-text-btn {
+    margin-right: auto;
+    height: 26px;
+    padding: 0 10px;
+    font-size: 9pt;
+    border: 1px solid rgb(180, 180, 180);
+    border-radius: 4px;
+    background: rgb(245, 245, 245);
+    color: rgb(40, 40, 40);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .copy-text-btn:hover:not(:disabled) {
+    background: rgb(235, 235, 235);
+  }
+
+  .copy-text-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
   }
 
   .separator {

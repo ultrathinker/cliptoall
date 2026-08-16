@@ -1,6 +1,12 @@
 pub mod settings;
 pub mod capture;
 pub mod clipboard;
+/// On-device OCR — "Copy text" feature (APP-STORE-PLAN.md §6). macOS-only;
+/// the module is gated so the build does not link Vision on other targets
+/// and `tauri::generate_handler!` does not try to register a non-existent
+/// command on Windows.
+#[cfg(target_os = "macos")]
+pub mod ocr;
 pub mod upload_s3;
 pub mod upload_gdrive;
 pub mod gdrive_pool;
