@@ -5,6 +5,7 @@
   import { writeText } from '@tauri-apps/plugin-clipboard-manager';
   import { settings } from '../lib/stores/settings';
   import { session, startUpload, copyLink, currentImagePath } from '../lib/stores/session.svelte';
+  import { displayHotkey } from '../lib/platform';
   import { onMount, onDestroy, tick } from 'svelte';
 
   let { onEdit }: { onEdit?: () => void } = $props();
@@ -339,7 +340,7 @@
               <input type="checkbox" checked={autoCloseEnabled} onchange={toggleAutoclose} />
               <span>{autoCloseRunning ? `Autoclose in ${autoCloseSeconds} seconds` : 'Autoclose'}</span>
             </label>
-            <span class="hint-text">{$settings.captureHotkey} = {$settings.defaultMode === 'image' ? 'Image' : 'Link'}, &nbsp; ({$settings.captureHotkey}) x2 = {$settings.defaultMode === 'image' ? 'Link' : 'Image'}</span>
+            <span class="hint-text">{displayHotkey($settings.captureHotkey)} = {$settings.defaultMode === 'image' ? 'Image' : 'Link'}, &nbsp; ({displayHotkey($settings.captureHotkey)}) x2 = {$settings.defaultMode === 'image' ? 'Link' : 'Image'}</span>
           </div>
         </div>
       </div>

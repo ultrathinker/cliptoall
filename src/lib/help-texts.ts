@@ -1,7 +1,30 @@
 // Help-panel and guide texts for the Settings window. Extracted verbatim from
 // Settings.svelte (pure static data) to shrink that component.
+//
+// Platform vocabulary: this file is shared between the Windows and macOS
+// builds. Strings that read identically on both (e.g. "log in") need no
+// branch. Where the wording genuinely differs (menu bar vs system tray,
+// Login Items vs Registry), we branch on IS_MAC — kept inline rather than
+// pulled out into per-platform modules so the help text stays in one place
+// for translation/review. Add a branch only when the platforms actually
+// diverge; do not branch for the sake of it.
+//
+// Build features: this file also branches on PLUGINS_ENABLED (TASK B /
+// Phase 4a). The Mac App Store edition strips out the entire plugin system,
+// so any sentence that mentions plugins in the user guide, and the entire
+// `guidePlugins` developer reference, is omitted. PLUGINS_ENABLED is a
+// Vite-time define (see vite.config.ts and lib/features.ts), so the
+// `false` branch is dead-stripped at build time and never ships in the
+// store bundle.
 
-export const helpTexts: Record<string, { title: string; text: string }> = {
+import { IS_MAC } from './platform';
+import { PLUGINS_ENABLED } from './features';
+
+// Help texts common to every build. The plugin-only help text (developer
+// reference for writing plugins) lives in `pluginHelpTexts` below, gated by
+// PLUGINS_ENABLED so the long developer manual is dead-stripped from the
+// store build's bundle.
+const baseHelpTexts: Record<string, { title: string; text: string }> = {
     autoclose: {
       title: 'Autoclose in 30 seconds',
       text: 'When enabled, the Results window (that shows after a screenshot) will automatically close after 30 seconds. This keeps your desktop clean — once the link is copied to your clipboard, you probably don\'t need the window anymore. If you disable this, the Results window stays open until you close it manually.',
@@ -11,24 +34,32 @@ export const helpTexts: Record<string, { title: string; text: string }> = {
       text: 'When enabled, pressing the Escape key will hide the Results window instead of closing it completely. The upload continues in the background and the link will still be copied to your clipboard. If disabled, Escape does nothing and you must close the window with the X button.',
     },
     autorun: {
-      title: 'Add to Autorun',
-      text: 'When enabled, ClipToAll will start automatically when you log in to Windows. It runs in the system tray so you can take screenshots anytime with the hotkey. The app registers itself in the Windows Registry under HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run.',
+      title: IS_MAC ? 'Open at Login' : 'Add to Autorun',
+      text: IS_MAC
+        ? 'When enabled, ClipToAll will start automatically when you log in. It appears in the menu bar so you can take screenshots anytime with the hotkey. The app registers itself as a Login Item for your user account.'
+        : 'When enabled, ClipToAll will start automatically when you log in to Windows. It runs in the system tray so you can take screenshots anytime with the hotkey. The app registers itself in the Windows Registry under HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run.',
     },
     logging: {
       title: 'Write to Log File',
-      text: 'When enabled, ClipToAll writes detailed timing and debug information to a log file (cliptoall.log) next to the executable. This is useful for troubleshooting if something isn\'t working right — you can see exactly what the app is doing step by step. Keep it off for normal use to avoid unnecessary disk writes.',
+      // The "next to the executable" wording was never true: log_file_path()
+      // in main.rs writes under the OS config dir on every platform.
+      text: `When enabled, ClipToAll writes detailed timing and debug information to a log file. This is useful for troubleshooting if something isn't working right — you can see exactly what the app is doing step by step. Keep it off for normal use to avoid unnecessary disk writes.
+
+The log lives at ${IS_MAC ? '~/Library/Application Support/ClipToAll/logs/cliptoall.log' : '%APPDATA%\\ClipToAll\\logs\\cliptoall.log'}, and rotates once it reaches 25 MB (one previous generation is kept as cliptoall.log.old).`,
     },
     outputMode: {
       title: 'Shared image size on HiDPI displays',
       text: `Affects only the SHARED image (upload / clipboard / "Save as file") — never what you edit; the editor always shows the capture pixel-for-pixel.
 
 THE PROBLEM (it's subtle):
-On a Windows display scaled above 100% (e.g. 150%), a screenshot has more pixels than it visually occupies — a region that looks 800 px wide is really 1200 px. The editor looks perfect because it's a DPI-aware app: it keeps all 1200 pixels and paints them onto exactly 1200 physical screen pixels. A plain image FILE opened in a browser can't do that — a browser draws 1 image pixel per CSS pixel, then Windows stretches that by your scale factor. So a shared file is EITHER ~1.5× too big (full pixels) OR resized-and-slightly-soft (fewer pixels). There is no way to make a plain file both correct-size AND perfectly crisp everywhere.
+${IS_MAC
+  ? 'On a Retina display (2× backing scale), a screenshot has more pixels than it visually occupies — a region that looks 800 px wide is really 1600 px. The editor looks perfect because it keeps all 1600 pixels and paints them onto exactly 1600 physical screen pixels. A plain image FILE opened in a browser can\'t do that — a browser draws 1 image pixel per CSS pixel, then stretches by the device pixel ratio. So a shared file is EITHER ~2× too big (full pixels) OR resized-and-soft (fewer pixels). There is no way to make a plain file both correct-size AND perfectly crisp everywhere.'
+  : 'On a Windows display scaled above 100% (e.g. 150%), a screenshot has more pixels than it visually occupies — a region that looks 800 px wide is really 1200 px. The editor looks perfect because it\'s a DPI-aware app: it keeps all 1200 pixels and paints them onto exactly 1200 physical screen pixels. A plain image FILE opened in a browser can\'t do that — a browser draws 1 image pixel per CSS pixel, then Windows stretches that by your scale factor. So a shared file is EITHER ~1.5× too big (full pixels) OR resized-and-slightly-soft (fewer pixels). There is no way to make a plain file both correct-size AND perfectly crisp everywhere.'}
 
 THE THREE MODES:
-• Full resolution — every physical pixel. Sharpest data, but in a browser it renders ~1.5× larger than you saw on screen. Best for archiving / OCR / recipients on HiDPI screens.
+• Full resolution — every physical pixel. Sharpest data, but in a browser it renders ${IS_MAC ? '~2×' : '~1.5×'} larger than you saw on screen. Best for archiving / OCR / recipients on HiDPI screens.
 • Resize to logical size — shrinks the shared image to its on-screen size. Smaller files, correct size in any viewer, but slightly softer (some detail is dropped). Good default for sharing into chats/docs.
-• Full-res + EXIF density — keeps ALL pixels and stamps a density tag in the JPEG. Modern browsers (Chrome, Safari, Firefox 90+) then show it at the correct logical size using every pixel — as crisp as the editor. Caveat: non-browser viewers (Windows Photos, Slack, Telegram) ignore the tag and show it at full (large) size, and this only works for JPEG (browsers ignore DPI in PNG).
+• Full-res + EXIF density — keeps ALL pixels and stamps a density tag in the JPEG. Modern browsers (Chrome, Safari, Firefox 90+) then show it at the correct logical size using every pixel — as crisp as the editor. Caveat: non-browser viewers (${IS_MAC ? 'Preview, Slack, Telegram' : 'Windows Photos, Slack, Telegram'}) ignore the tag and show it at full (large) size, and this only works for JPEG (browsers ignore DPI in PNG).
 
 Refs: MDN devicePixelRatio (https://developer.mozilla.org/en-US/docs/Web/API/Window/devicePixelRatio); EXIF density explainer (https://github.com/eeeps/exif-intrinsic-sizing-explainer).`,
     },
@@ -42,7 +73,9 @@ Refs: MDN devicePixelRatio (https://developer.mozilla.org/en-US/docs/Web/API/Win
     },
     hotkey: {
       title: 'Capture Hotkey',
-      text: 'The global keyboard shortcut that triggers a screenshot capture. Click the button and press your desired key combination (e.g., Alt+X, Ctrl+Shift+S). The hotkey works system-wide, even when ClipToAll is in the background. Must include at least one modifier key (Alt, Ctrl, or Shift) unless using a function key.',
+      text: IS_MAC
+        ? 'The global keyboard shortcut that triggers a screenshot capture. Click the button and press your desired key combination (e.g., Ctrl+Cmd+X, Ctrl+Cmd+S); press Escape to cancel and keep the current one. The hotkey works system-wide, even when ClipToAll is in the background. Must include at least one modifier key (Cmd, Ctrl, Option, or Shift) unless using a function key.\n\nPick a combination macOS does not already use. A global hotkey takes it away from every application — Cmd+X, for instance, would stop Cut from working everywhere.'
+        : 'The global keyboard shortcut that triggers a screenshot capture. Click the button and press your desired key combination (e.g., Alt+X, Ctrl+Shift+S). The hotkey works system-wide, even when ClipToAll is in the background. Must include at least one modifier key (Alt, Ctrl, or Shift) unless using a function key.',
     },
     defaultMode: {
       title: 'Default Mode',
@@ -59,11 +92,13 @@ Refs: MDN devicePixelRatio (https://developer.mozilla.org/en-US/docs/Web/API/Win
     guide: {
       title: 'ClipToAll — User Guide',
       text: `WHAT IS CLIPTOALL?
-ClipToAll is a lightweight screenshot tool for Windows. Press a hotkey, select a region on screen, and instantly get either the image in your clipboard or a public link to it. No bloat, no delays — capture, copy, done.
+ClipToAll is a lightweight screenshot tool. Press a hotkey, select a region on screen, and instantly get either the image in your clipboard or a public link to it. No bloat, no delays — capture, copy, done.
 
 HOW TO TAKE A SCREENSHOT
-Press Alt+X (or your custom hotkey) anywhere in Windows. The screen dims with a subtle color tint and a crosshair cursor appears. Click and drag to select the area you want to capture. Release the mouse button — done!
-\nYou can also left-click the tray icon to start a capture.
+${IS_MAC
+  ? 'Press Cmd+X (or your custom hotkey) anywhere. The screen dims with a subtle color tint and a crosshair cursor appears. Click and drag to select the area you want to capture. Release the mouse button — done!'
+  : 'Press Alt+X (or your custom hotkey) anywhere in Windows. The screen dims with a subtle color tint and a crosshair cursor appears. Click and drag to select the area you want to capture. Release the mouse button — done!'}
+\nYou can also ${IS_MAC ? 'left-click the menu bar icon' : 'left-click the tray icon'} to start a capture.
 \nTo cancel a capture, press Escape, right-click, or middle-click.
 
 TWO CAPTURE MODES
@@ -90,32 +125,41 @@ From the Results window, click the Edit button to open the built-in image editor
 \nYou get 7 colors, 3 brush sizes, and full undo/redo support (up to 50 steps). When done, save the edited image back.
 
 CLIPBOARD ENCRYPTION
-ClipToAll includes a handy clipboard encryption feature via the Clipboard Encryption plugin. While the capture overlay is visible, press the assigned encrypt or decrypt shortcut key to transform clipboard text using AES-256.
-\nShortcut keys are shown and configurable in Settings > Plugins. The encryption password is set in the plugin's Settings. This is useful for quickly encrypting sensitive text before pasting it somewhere.
+${PLUGINS_ENABLED
+  ? 'ClipToAll includes a handy clipboard encryption feature via the Clipboard Encryption plugin. While the capture overlay is visible, press the assigned encrypt or decrypt shortcut key to transform clipboard text using AES-256.\n\nShortcut keys are shown and configurable in Settings > Plugins. The encryption password is set in the plugin\'s Settings. This is useful for quickly encrypting sensitive text before pasting it somewhere.'
+  : 'ClipToAll\'s core capture and sharing features work without any plugins. Plugins (custom scripts that run during capture, like the Clipboard Encryption plugin) are a Developer-ID-edition extension and are not included in this build.'}
 
 TRAY ICON
-ClipToAll lives in your system tray (bottom-right corner of the taskbar).
-\nLeft-click the tray icon → starts a capture (same as pressing the hotkey)
-Right-click the tray icon → opens a menu with Settings, About, and Exit
+${IS_MAC
+  ? "ClipToAll lives in your menu bar (top-right of the screen).\n\\nLeft-click the menu bar icon → starts a capture (same as pressing the hotkey)\nRight-click the menu bar icon → opens a menu with Settings, About, and Exit"
+  : 'ClipToAll lives in your system tray (bottom-right corner of the taskbar).\n\\nLeft-click the tray icon → starts a capture (same as pressing the hotkey)\nRight-click the tray icon → opens a menu with Settings, About, and Exit'}
 
 KEYBOARD SHORTCUTS SUMMARY
-\nAlt+X — start capture (or your custom hotkey)
-Alt+X, X — double-press to toggle mode during capture
+\n${IS_MAC ? 'Cmd+X' : 'Alt+X'} — start capture (or your custom hotkey)
+${IS_MAC ? 'Cmd+X, Cmd+X' : 'Alt+X, X'} — double-press to toggle mode during capture
 Escape — cancel capture / hide Results window
-Plugin shortcut keys — shown in Settings > Plugins (e.g. encrypt, decrypt, ungroup)
+${PLUGINS_ENABLED ? 'Plugin shortcut keys — shown in Settings > Plugins (e.g. encrypt, decrypt, ungroup)' : '(plugin shortcut keys are not available in this build)'}
 
 FIRST-TIME SETUP
-1. Launch ClipToAll — it appears in the system tray
-2. Right-click tray → Settings
+1. Launch ClipToAll — it appears in the ${IS_MAC ? 'menu bar' : 'system tray'}
+2. Right-click ${IS_MAC ? 'menu bar icon' : 'tray'} → Settings
 3. Choose your preferred Default Mode (Green: Copy Image is recommended to start)
 4. If you want link sharing: select Google Drive or S3 under Image Storage and configure credentials
-5. Optionally enable "Add to Autorun" so it starts with Windows
+5. Optionally enable "${IS_MAC ? 'Open at Login' : 'Add to Autorun'}" so it ${IS_MAC ? 'starts when you log in' : 'starts with Windows'}
 6. Click Save — you're ready to go!`,
     },
+};
+
+// Plugin-only developer reference for writing plugins. Whole entry is
+// dead-stripped from the store build — see the file header for why.
+const pluginHelpTexts: Record<string, { title: string; text: string }> = PLUGINS_ENABLED
+  ? {
     guidePlugins: {
       title: 'Plugins — Developer Guide',
       text: `WHAT ARE PLUGINS?
-Plugins extend ClipToAll with new skills that activate during the capture overlay. Each plugin is a standalone .exe file that communicates with ClipToAll via a simple JSON protocol over stdin/stdout. Plugins can do anything — encrypt clipboard, manipulate windows, call APIs, transform text — the possibilities are endless.
+Plugins extend ClipToAll with new skills that activate during the capture overlay. ${IS_MAC
+  ? 'Each plugin is a standalone executable file (no extension; just the executable bit set) that communicates with ClipToAll via a simple JSON protocol over stdin/stdout. Plugins can do anything — encrypt clipboard, manipulate windows, call APIs, transform text — the possibilities are endless.'
+  : 'Each plugin is a standalone .exe file that communicates with ClipToAll via a simple JSON protocol over stdin/stdout. Plugins can do anything — encrypt clipboard, manipulate windows, call APIs, transform text — the possibilities are endless.'}
 
 HOW PLUGINS WORK
 When ClipToAll starts, it launches each enabled plugin as a background process. The plugin sends a "hello" message describing its name, version, and available functions with keyboard shortcuts. When the user presses a plugin's shortcut key during the capture overlay, ClipToAll sends a "call" message and the plugin executes its function.
@@ -159,7 +203,9 @@ When the user presses a plugin's shortcut key, your plugin receives:
 }
 \n• function — the function id from your hello message
 • settings — the JSON string the user entered in Settings (or empty if not configured)
-\nNote: If your plugin needs the foreground window (e.g. to manipulate a specific window), call GetForegroundWindow() directly inside your plugin after a brief delay (~100ms) to let the window system settle after the overlay closes.
+\nNote: If your plugin needs the foreground window (e.g. to manipulate a specific window), ${IS_MAC
+  ? 'on macOS use your preferred Cocoa/AppKit window-listing API inside your plugin after a brief delay (~100ms) to let the window system settle after the overlay closes.'
+  : 'call GetForegroundWindow() directly inside your plugin after a brief delay (~100ms) to let the window system settle after the overlay closes.'}
 
 THE RESULT RESPONSE
 After executing, print one JSON line:
@@ -175,29 +221,29 @@ ClipToAll sends this when exiting or when the plugin is disabled:
 
 LANGUAGE CHOICE
 You can write plugins in any language that can read stdin and write stdout:
-\n• Rust — best performance, native Windows API access
-• C# / .NET — easy Win32 interop, familiar for Windows devs
-• Python — quick prototyping (bundle with PyInstaller into .exe)
+\n• Rust — best performance, ${IS_MAC ? 'native macOS API access' : 'native Windows API access'}
+• ${IS_MAC ? 'Swift — easy Cocoa interop, familiar for Mac devs' : 'C# / .NET — easy Win32 interop, familiar for Windows devs'}
+• Python — quick prototyping ${IS_MAC ? '(bundle with PyInstaller or ship as a standalone binary)' : '(bundle with PyInstaller into .exe)'}
 • Go, C++, Node.js — all work fine
-\nThe only requirement: compile to a standalone .exe on Windows.
+\nThe only requirement: ${IS_MAC ? 'produce a standalone executable that the app can launch' : 'compile to a standalone .exe on Windows'}.
 
 DEPLOYMENT
-Place your plugin file in the plugins/ folder next to ClipToAll.exe. On next launch (or when the user clicks the Plugins tab), ClipToAll discovers it automatically.
+Place your plugin file in the plugins/ folder next to ClipToAll${IS_MAC ? '.app/Contents/MacOS/' : '.exe'}. On next launch (or when the user clicks the Plugins tab), ClipToAll discovers it automatically.
 
 PLUGIN SETTINGS & SECURITY
-If your plugin needs configuration (passwords, API keys, etc.), declare settings_description and settings_format in the hello message. The user enters a JSON string in the Settings UI. This string is encrypted with Windows DPAPI before being saved to disk and is passed to your plugin in the call context.
+If your plugin needs configuration (passwords, API keys, etc.), declare settings_description and settings_format in the hello message. The user enters a JSON string in the Settings UI. This string is encrypted ${IS_MAC ? 'in the macOS Keychain' : 'with Windows DPAPI'} before being saved to disk and is passed to your plugin in the call context.
 
 RECOMMENDED CLI MODES
 We recommend every plugin supports these command-line modes for developer ergonomics:
-\nplugin.exe              Show help (name, version, functions, usage)
-plugin.exe --help       Same as above
-plugin.exe --daemon     Run as ClipToAll plugin (stdin/stdout JSON)
-plugin.exe --call <json>   Execute one function and exit
-plugin.exe --call @file.json   Read call JSON from a file
+\n${IS_MAC ? 'plugin' : 'plugin.exe'}              Show help (name, version, functions, usage)
+${IS_MAC ? 'plugin' : 'plugin.exe'} --help       Same as above
+${IS_MAC ? 'plugin' : 'plugin.exe'} --daemon     Run as ClipToAll plugin (stdin/stdout JSON)
+${IS_MAC ? 'plugin' : 'plugin.exe'} --call <json>   Execute one function and exit
+${IS_MAC ? 'plugin' : 'plugin.exe'} --call @file.json   Read call JSON from a file
 \nThe --call mode lets you test functions without running ClipToAll:
-\nplugin.exe --call "{\\"type\\":\\"call\\",\\"function\\":\\"encrypt\\",\\"context\\":{\\"settings\\":\\"{\\\\\\"password\\\\\\":\\\\\\"test\\\\\\"}\\"}}"
+\n${IS_MAC ? 'plugin' : 'plugin.exe'} --call "{\\"type\\":\\"call\\",\\"function\\":\\"encrypt\\",\\"context\\":{\\"settings\\":\\"{\\\\\\"password\\\\\\":\\\\\\"test\\\\\\"}\\"}}"
 \nOr create a test.json file and run:
-\nplugin.exe --call @test.json
+\n${IS_MAC ? 'plugin' : 'plugin.exe'} --call @test.json
 
 TIPS
 • Keep stdout clean — only print hello and result JSON lines. Debug output should go to stderr or a log file
@@ -206,7 +252,7 @@ TIPS
 • A plugin can expose multiple functions — each gets its own keyboard shortcut
 
 SCRIPT PLUGINS (PYTHON & C#)
-In addition to compiled .exe plugins, ClipToAll supports Python (.py) and C# (.cs) script plugins. These are single-file scripts placed in the plugins/ folder.
+In addition to compiled ${IS_MAC ? 'native' : '.exe'} plugins, ClipToAll supports Python (.py) and C# (.cs) script plugins. These are single-file scripts placed in the plugins/ folder.
 \nRequirements:
 • Python scripts need Python installed and in PATH
 • C# scripts need the .NET SDK installed and in PATH (uses "dotnet run")
@@ -238,4 +284,12 @@ dotnet run script.cs -- --call '{"type":"call","function":"run","context":{"sett
 \nCreating Scripts:
 Use the "Add Script" button in the Plugins tab, or manually create a .py/.cs file in the plugins/ folder with proper metadata headers. C# scripts are pre-compiled on save for faster execution.`,
     },
-  };
+  }
+  : {};
+
+// Combined help text map: base + plugin-specific entries. The plugin
+// entries are dead-stripped from the store build (above ternary).
+export const helpTexts: Record<string, { title: string; text: string }> = {
+  ...baseHelpTexts,
+  ...pluginHelpTexts,
+};

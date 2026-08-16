@@ -63,8 +63,12 @@ fn default_results_height() -> f64 { crate::RESULTS_MIN_HEIGHT }
 fn default_true() -> bool { true }
 #[cfg(windows)]
 fn default_capture_hotkey() -> String { "Alt+X".to_string() }
+// Cmd+X is Cut on every macOS app, and a registered global hotkey takes the
+// combination away from all of them — so it cannot be the default here. Ctrl+Cmd
+// keeps the "X" mnemonic shared with the Windows Alt+X and is not claimed by the
+// system or by common apps.
 #[cfg(not(windows))]
-fn default_capture_hotkey() -> String { "Cmd+X".to_string() }
+fn default_capture_hotkey() -> String { "Ctrl+Cmd+X".to_string() }
 fn default_mode_image() -> String { "image".to_string() }
 fn default_jpeg_quality() -> u8 { 85 }
 /// Empty sentinel: an absent output_mode is migrated from downscale_for_dpi on load.
@@ -143,6 +147,17 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             image_prefix: "cta_".to_string(),
+            // On macOS, defaulting autorun to true installs a LaunchAgent on
+            // first launch without the user ever asking — both a 2.1 impression
+            // for the App Store ("the app does things the user did not request")
+            // and the wrong default in general: login items should be opt-in.
+            // Windows keeps its historical `true`: that platform's auto-start
+            // registry entry is the convention the existing settings file
+            // already assumes, and changing the default there would silently
+            // turn off autorun for everyone who never visited the Settings page.
+            #[cfg(target_os = "macos")]
+            autorun: false,
+            #[cfg(not(target_os = "macos"))]
             autorun: true,
             autoclose: true,
             amazon_access_key_id: String::new(),
@@ -231,6 +246,16 @@ fn read_settings_from_disk() -> AppSettings {
                 // downscale_for_dpi boolean: false → "off", true → "resize".
                 if s.output_mode.trim().is_empty() {
                     s.output_mode = if s.downscale_for_dpi { "resize" } else { "off" }.to_string();
+                }
+                // Migrate away from the earlier macOS default: Cmd+X is the
+                // system Cut shortcut, and registering it globally breaks Cut in
+                // every application. A default change alone would not reach the
+                // users who already have it written to disk.
+                #[cfg(not(windows))]
+                if s.capture_hotkey.eq_ignore_ascii_case("Cmd+X")
+                    || s.capture_hotkey.eq_ignore_ascii_case("Command+X")
+                {
+                    s.capture_hotkey = default_capture_hotkey();
                 }
                 return s;
             }

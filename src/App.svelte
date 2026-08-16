@@ -6,6 +6,7 @@
   import { applyTheme } from './lib/stores/theme';
   import { settings, defaultSettings } from './lib/stores/settings';
   import { session, initSession, markSkipped, startUpload, applyEditedPath, currentImagePath, updateUrl, markContentReady } from './lib/stores/session.svelte';
+  import { showAlert } from './lib/stores/alert.svelte';
   import Settings from './windows/Settings.svelte';
   import About from './windows/About.svelte';
   import Results from './windows/Results.svelte';
@@ -124,6 +125,27 @@
       markContentReady(p.callId);
     });
 
+    // Screen-Recording TCC preflight — fired by `start_capture` in main.rs
+    // whenever the user presses the capture hotkey without the grant. The
+    // Rust side already showed + focused the main window before emitting, so
+    // by the time this handler runs AlertModal is mounted in a visible
+    // window. Only relevant on macOS, but the listener is harmless elsewhere
+    // — the event is never emitted on Windows.
+    listen<{ settings_url: string }>('screen-recording-required', (event) => {
+      const url = event.payload?.settings_url;
+      // Spell out BOTH the user's next step and the gotcha. "Restart the app"
+      // is the single most-skipped line in any macOS TCC onboarding copy —
+      // the system prompts the user, they flip the toggle, nothing happens,
+      // they think the toggle is broken. Say it twice (once here, once in the
+      // App Store review notes) and link the system pane so they don't have
+      // to dig for it.
+      showAlert(
+        'Screen Recording permission is required to capture your screen.\n\n' +
+        'Click "Open Settings" below to grant ClipToAll access in System Settings → Privacy & Security → Screen Recording, then quit and reopen ClipToAll for the new permission to take effect.',
+        url ? { label: 'Open Settings', url } : undefined,
+      );
+    });
+
     if (isMainWindow) {
       // Main window — tray app, settings, about
       currentWindow = 'main';
@@ -151,8 +173,13 @@
       });
     } else if (win.label === 'overlay') {
       // macOS web overlay (Phase 3) — created already visible/sized/positioned
-      // by overlay_web.rs, nothing to fetch or show here. body's opaque theme
-      // background (app.css) would otherwise defeat the window's transparency.
+      // by overlay_web.rs, nothing to fetch or show here. Now opaque (TASK A,
+      // phase 14): Tauri's `macos-private-api` is gone, so the body uses the
+      // .overlay-window class to switch from the theme crimson to a neutral
+      // dim background that matches the canvas wipe/empty state. The canvas
+      // covers the entire viewport (see OverlayWeb.svelte's .overlay-canvas),
+      // so the user only ever sees this background in the gap between
+      // captures or inside the 400 ms ready-fallback.
       document.body.classList.add('overlay-window');
       currentWindow = 'overlay';
     } else {
@@ -219,7 +246,7 @@
 
 <main
   class="w-full h-screen"
-  style="background: {currentWindow === 'overlay' ? 'transparent' : 'var(--bg-base)'}; color: var(--text-main);"
+  style="background: {currentWindow === 'overlay' ? 'rgb(40, 38, 42)' : 'var(--bg-base)'}; color: var(--text-main);"
 >
   {#if currentWindow === 'settings'}
     <Settings onClose={handleClose} />

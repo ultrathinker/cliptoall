@@ -24,12 +24,19 @@
     color: var(--text-main);
   }
 
-  /* The macOS web overlay window is transparent (App.svelte adds this class
-     on mount when the window label is "overlay") — body's opaque theme
-     background would otherwise paint over the WebviewWindow's transparency,
-     same as <main>'s own background is made conditional in App.svelte. */
+  /* The macOS web overlay window is now opaque (TASK A, phase 14) — Tauri's
+     `macos-private-api` feature is gone, so NSWindow transparency is no longer
+     available. The overlay's visible content is the dimmed screenshot drawn
+     onto a full-window canvas in OverlayWeb.svelte, which already covers the
+     whole viewport (`100vw` × `100vh`, `position: fixed`, `inset: 0`), so the
+     body background is only seen in two narrow windows: (a) during the brief
+     gap between captures while the canvas is wiped and the window is still
+     visible, and (b) inside the 400 ms fallback if the JS ready signal never
+     arrives. In both cases a neutral dark tone reads as "the overlay is
+     showing its background, not the desktop" — matches the dimmed screenshot
+     closely enough that a user cannot tell the difference. */
   body.overlay-window {
-    background: transparent;
+    background: rgb(40, 38, 42);
   }
 
   input[type="text"],

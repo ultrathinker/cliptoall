@@ -40,6 +40,12 @@ export const readImageBase64 = (path: string) => invoke<string>('read_image_base
 export const saveImageBase64 = (base64Data: string) => invoke<string>('save_image_base64', { base64Data });
 export const saveImageToFile = (sourcePath: string, outputScale: number) =>
   invoke<string | null>('save_image_to_file', { sourcePath, outputScale });
+// macOS-only: the destination path is resolved by the tauri-plugin-dialog
+// `save()` panel (`NSSavePanel`), so we hand Rust the already-chosen path
+// instead of asking it to run its own dialog (Windows owns the Win32 OFN
+// path inside `save_image_to_file`).
+export const saveImageToPath = (sourcePath: string, outputScale: number, destPath: string) =>
+  invoke<string | null>('save_image_to_path', { sourcePath, outputScale, destPath });
 export const getPendingImage = () => invoke<PendingImage | null>('get_pending_image');
 export const copyImageToClipboard = (path: string, outputScale: number) =>
   invoke<void>('copy_image_to_clipboard', { path, outputScale });

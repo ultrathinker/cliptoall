@@ -4,6 +4,12 @@ pub mod clipboard;
 pub mod upload_s3;
 pub mod upload_gdrive;
 pub mod gdrive_pool;
+/// Plugin commands are gated by the `plugins` Cargo feature (TASK B / Phase 4a).
+/// The Mac App Store build compiles this module out entirely with
+/// `--no-default-features` — see Cargo.toml for the rationale. The
+/// `commands::plugins::*` symbols referenced from main.rs's `generate_handler!`
+/// and `setup()` are likewise cfg-gated there.
+#[cfg(windows)]
 pub mod plugins;
 
 /// Reject an IPC call that comes from any window other than the main Settings

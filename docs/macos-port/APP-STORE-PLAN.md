@@ -11,6 +11,27 @@ folded in here. Where a claim below was verified against the code, it says so.
 Read `HANDOFF.md` first for how the port works and `WORKLOG-2026-08-16.md` for
 what was done most recently.
 
+## Status — updated 2026-08-16 18:05
+
+| Phase | State |
+|---|---|
+| 0 — commit, widen CI, macOS matrix | **done**, pushed as `4080206` + `968667e` |
+| 1 — remove `macos-private-api` | not started — **this is the next gate** |
+| 2 — de-Windows the visible surface | **done**, in the working tree |
+| 3 — fix unfinished signals | **done**, in the working tree, GUI check pending |
+| 4 — store build configuration | not started |
+| 5 — OCR, multi-monitor | not started |
+| 6 — submission materials | not started |
+
+Phases 2 and 3 were run out of order relative to §8's table, because Phase 1
+needs an interactive overlay check and the text/settings work did not. That
+ordering choice does not change the fact that **Phase 1 still gates the whole
+plan** — if the private-API flag cannot be removed, none of the rest ships.
+
+Everything from phases 2 and 3 is uncommitted. `cargo clippy -D warnings`,
+`cargo test` (27/27) and `svelte-check` (103 files) are clean; the GUI paths
+that only a launch can confirm are listed in §4 below.
+
 ---
 
 ## 0. The decisions this plan assumes
@@ -241,8 +262,29 @@ probably pass technically but leaves the 4.3 argument thin.
 
 ---
 
-## 9. Open question to settle before Phase 3
+## 9. Settled: `Cmd+X` did break Cut
 
-Does `Cmd+X` actually break Cut system-wide while the app runs? Five seconds to
-test, and the answer decides whether the hotkey default change is urgent or
-merely advisable.
+Confirmed interactively — with the app running, Cut stopped working everywhere.
+The default is now `Ctrl+Cmd+X`, with a migration for settings files that
+already hold `Cmd+X`. Catalogued as bug #26 in `HANDOFF.md`.
+
+---
+
+## 10. Still to verify by hand (phases 2–3)
+
+Neither the agent that wrote this code nor the orchestrator can confirm these
+without clicking; they are not "probably fine".
+
+- **Save as file** opens a native save panel and writes a readable image at the
+  chosen path, in both JPEG and PNG.
+- **The Screen Recording dialog** — only reproducible by revoking the grant in
+  System Settings. Worth doing once before a release build, not during
+  development: the dev build is unsigned unless `APPLE_DEV_SIGNING_IDENTITY` is
+  set, and TCC is keyed to the signature, so an unsigned dev run re-prompts
+  after every rebuild and will mislead you.
+- **The deep link** `x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture`
+  lands on the Screen Recording pane specifically. Only that the URL is
+  *accepted* has been checked, not where it lands.
+- **`Ctrl+Cmd+X` captures**, and `Cmd+X` cuts text again.
+- **Help and settings text** reads as macOS throughout — no Registry, taskbar,
+  `.exe`, or "Super".

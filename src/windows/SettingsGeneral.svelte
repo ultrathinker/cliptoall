@@ -2,6 +2,7 @@
   import { applyTheme } from '../lib/stores/theme';
   import { themes } from '../lib/themes';
   import type { AppSettings } from '../lib/stores/settings';
+  import { IS_MAC, displayHotkey, modifierLabelForCmd } from '../lib/platform';
   import '../lib/settings-general.css';
 
   // `settings` is the parent's reactive localSettings proxy — mutating its
@@ -48,6 +49,14 @@
     e.preventDefault();
     e.stopPropagation();
     if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
+    // Escape is the way out, so it can never be assigned as the capture key.
+    // Without this there was no way back once listening had started: Escape
+    // fell through to the "unsupported key" error and the old hotkey was
+    // already gone from the field.
+    if (e.code === 'Escape') {
+      cancelHotkeyCapture();
+      return;
+    }
     const key = mapKeyCode(e.code);
     if (!key) return;
     if (!HOTKEY_SUPPORTED_KEYS.has(key.toUpperCase())) {
@@ -58,7 +67,7 @@
     if (e.ctrlKey) parts.push('Ctrl');
     if (e.altKey) parts.push('Alt');
     if (e.shiftKey) parts.push('Shift');
-    if (e.metaKey) parts.push('Super');
+    if (e.metaKey) parts.push(modifierLabelForCmd());
     const isSpecial = /^F\d{1,2}$/.test(key) || key === 'PrintScreen';
     if (parts.length === 0 && !isSpecial) {
       hotkeyError = 'A modifier key (Ctrl, Alt, Shift) is required';
@@ -70,12 +79,18 @@
     hotkeyListening = false;
   }
 
+  // Value as it stood when listening started, so cancelling puts it back
+  // rather than leaving whatever the field happened to hold.
+  let hotkeyBeforeListening = $state('');
+
   function toggleHotkeyCapture() {
+    if (!hotkeyListening) hotkeyBeforeListening = settings.captureHotkey;
     hotkeyListening = !hotkeyListening;
     hotkeyError = '';
   }
 
   function cancelHotkeyCapture() {
+    if (hotkeyBeforeListening) settings.captureHotkey = hotkeyBeforeListening;
     hotkeyListening = false;
     hotkeyError = '';
   }
@@ -102,7 +117,7 @@
       <div class="cb-row">
         <label class="cb-label">
           <input type="checkbox" bind:checked={settings.autorun} />
-          <span>Add to Autorun</span>
+          <span>{IS_MAC ? 'Open at Login' : 'Add to Autorun'}</span>
         </label>
         <button class="help-btn" onclick={() => showHelp('autorun')}>?</button>
       </div>
@@ -145,13 +160,16 @@
             class="hotkey-input listening"
             readonly
             autofocus
-            placeholder="Press keys... (click to cancel)"
+            placeholder="Press keys..."
             onkeydown={handleHotkeyKeydown}
             onclick={cancelHotkeyCapture}
           />
+          <!-- Say how to get out. Without this the only visible exit was a
+               click on the field itself, which nobody discovers. -->
+          <span class="hotkey-hint">Escape or a click cancels and keeps {displayHotkey(hotkeyBeforeListening)}</span>
         {:else}
           <button class="hotkey-input" onclick={toggleHotkeyCapture}>
-            {settings.captureHotkey}
+            {displayHotkey(settings.captureHotkey)}
           </button>
         {/if}
         {#if hotkeyError}

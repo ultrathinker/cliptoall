@@ -75,7 +75,7 @@ use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
     CGBitmapContextCreate, CGColorSpace, CGContext, CGDirectDisplayID, CGDisplayBounds,
     CGDisplayCopyDisplayMode, CGDisplayMode, CGImage, CGImageAlphaInfo, CGImageByteOrderInfo,
-    CGMainDisplayID,
+    CGMainDisplayID, CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess,
 };
 use objc2_foundation::{NSArray, NSError};
 use objc2_screen_capture_kit::{
@@ -248,10 +248,7 @@ fn take_owned_cached_content(t0: Instant) -> Result<Retained<SCShareableContent>
     {
         let mut guard = CACHED_CONTENT.lock().unwrap();
         if guard.is_none() {
-            match resolve_shareable_content(t0) {
-                Ok(sc) => *guard = Some(sc),
-                Err(e) => return Err(e),
-            }
+            *guard = Some(resolve_shareable_content(t0)?);
         }
     }
     // Borrow the cached ptr briefly, then drop the lock and re-retain it.
@@ -627,7 +624,7 @@ fn draw_cgimage_into_rgba(
     }
     .ok_or_else(|| "CGBitmapContextCreate returned None".to_string())?;
 
-    let ctx_ref: &CGContext = &*ctx;
+    let ctx_ref: &CGContext = &ctx;
     let rect = CGRect {
         origin: CGPoint { x: 0.0, y: 0.0 },
         size: CGSize {
@@ -678,4 +675,60 @@ pub fn primary_monitor_scale() -> f32 {
             1.0
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Screen-Recording TCC preflight
+// ---------------------------------------------------------------------------
+//
+// Without Screen Recording permission, `SCScreenshotManager.captureImage`
+// silently returns a black buffer (or, depending on macOS version, an error
+// that mentions TCC internally) — the app looks broken with no user-visible
+// explanation. This is the single strongest "unfinished" signal an App
+// Store reviewer would hit on first launch, because the prompt fires the
+// very first time capture is attempted.
+//
+// `CGPreflightScreenCaptureAccess` is a cheap query that returns whether
+// the calling *signed* application already has the TCC grant, without
+// triggering any UI. `CGRequestScreenCaptureAccess` is the one that
+// actually triggers the system prompt on the very first call — but on a
+// signed developer build the user must also re-grant after every code
+// change, so the prompt alone is not enough; the user has to know to
+// restart the app for the new signature to take effect.
+//
+// We preflight on the hotkey path (not at startup) so the first launch
+// is unobtrusive: if the user never captures, they never see a permission
+// dialog. The hotkey handler in main.rs is the single caller.
+//
+/// True if the signed app already holds the Screen Recording TCC grant.
+///
+/// Cheap and side-effect-free; safe to call on every hotkey press. Returns
+/// `false` for an unsigned ad-hoc build (the OS only recognizes stable
+/// signatures for TCC purposes — HANDOFF bug #11 covers why this project's
+/// dev runs use a stable codesigning identity rather than Xcode's default).
+pub fn screen_capture_access_granted() -> bool {
+    // CGPreflightScreenCaptureAccess is declared `extern "C-unwind"` by
+    // objc2-core-graphics — wrap in catch_unwind so a panic on the FFI
+    // boundary (Apple's docs explicitly allow it to crash on mis-signed
+    // callers) doesn't tear down the capture thread.
+    let granted = std::panic::catch_unwind(|| CGPreflightScreenCaptureAccess());
+    match granted {
+        Ok(g) => g,
+        Err(_) => {
+            crate::log("    [tcc] CGPreflightScreenCaptureAccess panicked — treating as denied");
+            false
+        }
+    }
+}
+
+/// Trigger the system's Screen Recording permission prompt. Returns true
+/// if the user granted access in the dialog. Idempotent — calling it
+/// after access has already been granted is a no-op.
+///
+/// **Note**: macOS only honours a freshly-granted TCC entry after the
+/// app is *restarted* (the new signature has to be the one running when
+/// SCK/TCC re-checks). The dialog that the frontend shows in response to
+/// a `false` preflight has to say this — see `start_capture` in main.rs.
+pub fn request_screen_capture_access() -> bool {
+    std::panic::catch_unwind(|| CGRequestScreenCaptureAccess()).unwrap_or(false)
 }

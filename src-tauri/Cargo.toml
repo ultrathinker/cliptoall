@@ -8,16 +8,41 @@ edition = "2021"
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }
 
+# The plugin system is Windows-only — gated with `#[cfg(windows)]`, not with a
+# Cargo feature, so there is exactly one macOS build and what you run is what
+# ships. Three reasons it cannot live on macOS:
+#   * `plugins_dir()` resolves to <exe dir>/plugins, which inside a .app bundle
+#     is `Contents/MacOS/plugins`. Dropping an executable there breaks the code
+#     signature of a notarised app — so the mechanism is broken on macOS even
+#     outside the App Store.
+#   * The App Sandbox forbids spawning external interpreters outright, so the
+#     store edition could never have it regardless of how it were gated.
+#   * A build flag would mean two macOS binaries to test by hand, and the one
+#     you happened to launch would not necessarily be the one that ships.
+# The code is not deleted — restoring it is a change of cfg predicate.
+# `geometry::OverlayResult::PluginCall` stays on both platforms: it carries two
+# `String`s and lets `handle_overlay_result` keep one identical shape.
+
 [dependencies]
-# macos-private-api: needed for WebviewWindowBuilder::transparent() on macOS
-# (the web overlay, Phase 3). No-op on Windows — transparent() is already
-# available there unconditionally (tauri's own cfg is
-# `any(not(target_os = "macos"), feature = "macos-private-api")`).
-tauri = { version = "2.0", features = ["tray-icon", "macos-private-api"] }
+# The macOS web overlay window does NOT need transparency. It draws the dimmed
+# screenshot onto a canvas covering the whole screen (`100vw` × `100vh`,
+# `position: fixed`, `inset: 0` in OverlayWeb.svelte), so its visible content is
+# already opaque edge to edge. The `transparent: true` call that previously
+# required Tauri's `macos-private-api` feature is removed — see Phase 1 of
+# docs/macos-port/APP-STORE-PLAN.md for why that feature gates the App Store
+# build and why the flag is unneeded here. (Verified: brief §1, phase 14 task.)
+tauri = { version = "2.0", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2.0"
 tauri-plugin-clipboard-manager = "2.0"
 tauri-plugin-single-instance = "2.0"
 tauri-plugin-opener = "2.0"
+# Save-As native panel on macOS (Phase 3 / TASK 3). Without this the editor's
+# "Save as file" button called `save_image_to_file`, which is a stub on macOS
+# that returned "save_image_to_file not yet implemented on macOS" — the
+# raw string landed in the error modal. The dialog plugin gives us a proper
+# `NSSavePanel`; the Rust side then encodes/copies to the chosen path via
+# the new `save_image_to_path` command (see commands/capture.rs).
+tauri-plugin-dialog = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.40", features = ["full"] }
@@ -53,7 +78,7 @@ objc2-screen-capture-kit = { version = "0.3", default-features = true, features 
 # explicitly under the same target gate.
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSArray", "NSError"] }
-objc2-core-graphics = { version = "0.3", features = ["CGImage", "CGColorSpace", "CGContext", "CGDataProvider", "CGDirectDisplay"] }
+objc2-core-graphics = { version = "0.3", features = ["CGImage", "CGColorSpace", "CGContext", "CGDataProvider", "CGDirectDisplay", "CGWindow"] }
 objc2-core-foundation = { version = "0.3", features = ["CFCGTypes"] }
 block2 = "0.6"
 

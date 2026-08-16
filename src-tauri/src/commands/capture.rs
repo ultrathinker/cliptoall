@@ -658,6 +658,57 @@ pub fn save_image_to_file(source_path: String, output_scale: f32) -> Result<Opti
     Ok(Some(final_path))
 }
 
+/// Save the cropped screenshot to a caller-supplied destination path. macOS
+/// counterpart to the Win32-OFN-based `save_image_to_file`: the frontend
+/// resolves the destination via the tauri-plugin-dialog `save()` panel
+/// (`NSSavePanel`) and then invokes this command with the chosen path.
+///
+/// The encoding logic is deliberately duplicated from the Windows
+/// `save_image_to_file` rather than factored into a shared helper, because
+/// Phase 3 brief mandates "the Windows path must be byte-for-byte untouched".
+/// If you change one, change both — the two stay in lockstep by design.
+///
+/// Returns Some(path) on success. The frontend treats a null result from the
+/// save dialog as "user cancelled" and never invokes this command in that
+/// case, so None is reserved for the rare I/O failure during re-encoding.
+///
+/// Security: the FIRST thing this command does is `ensure_temp_screenshot_path`
+/// on the source. Without that check, a caller could point the command at any
+/// readable file (e.g. `/etc/passwd`) and have its bytes rewritten into the
+/// user-chosen destination — the same past security finding that forced the
+/// check into the Windows command (see comments there).
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn save_image_to_path(source_path: String, output_scale: f32, dest_path: String) -> Result<Option<String>, String> {
+    use std::path::Path;
+
+    ensure_temp_screenshot_path(&source_path)?;
+
+    let final_path = Path::new(&dest_path).to_path_buf();
+    let dest_ext = final_path.extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+
+    // Transcode to the chosen format (source is a lossless PNG working copy,
+    // so JPEG is encoded exactly once here rather than copied byte-for-byte).
+    // Honor "resize shared images to logical size" for saved files too, so
+    // all output paths (upload / clipboard / save-as) behave consistently.
+    // Users who want full-resolution archival saves simply leave that
+    // setting off.
+    let rgb = apply_output_downscale(image::open(&source_path).map_err(|e| e.to_string())?.to_rgb8(), output_scale);
+    if dest_ext == "png" {
+        // EXIF density is ignored by browsers for PNG, so PNG save is just full-res.
+        rgb.save_with_format(&final_path, image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    } else {
+        save_jpeg(&rgb, &final_path, output_jpeg_quality())?;
+        if output_mode() == "exif" && output_scale > 1.05 {
+            write_exif_density(&final_path, rgb.width(), rgb.height(), output_scale);
+        }
+    }
+
+    Ok(Some(final_path.to_string_lossy().to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

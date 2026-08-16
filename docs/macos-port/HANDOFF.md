@@ -544,6 +544,46 @@ what the button actually does — and note that reverse-image search fetches
 once and caches, so firing it early poisons the result permanently rather
 than merely showing a blank.**
 
+**#26 — `Cmd+X` as the capture hotkey steals Cut from every application.**
+A global hotkey registered through `RegisterEventHotKey` takes the
+combination away system-wide, and `Cmd+X` is Cut in every macOS app. This
+was confirmed interactively: with the app running, Cut stopped working
+everywhere. The default is now `Ctrl+Cmd+X`, which keeps the `X` mnemonic
+shared with the Windows `Alt+X` and is claimed by neither the system nor
+common apps. A default change alone was not enough — existing
+`settings.json` files already held `Cmd+X`, so `read_settings_from_disk`
+migrates that value on load. **Lesson: before choosing a global hotkey on
+macOS, check it against the system shortcut list. Taking a combination
+globally is not like binding it inside your own window.**
+
+**#27 — Directing the user to Screen Recording settings before ever
+requesting access shows them a list the app is not in.**
+The first cut of the TCC preflight checked `CGPreflightScreenCaptureAccess`
+and, on `false`, showed a dialog deep-linking to Privacy & Security →
+Screen Recording — without ever calling
+`CGRequestScreenCaptureAccess`. But an app is only listed in that pane once
+it has actually requested the grant, so a first-run user would arrive at a
+pane with no ClipToAll row to toggle. That is worse than the original
+silent failure: the app confidently gives an instruction that cannot be
+followed. `start_capture` now requests first (which also raises the
+system's own prompt and registers the app), and only explains afterwards.
+**Lesson: on macOS, requesting a permission is what creates the TCC entry.
+A preflight tells you the answer; it does not put you on the list.**
+
+**#28 — `help-texts.ts` is shared with Windows, so it cannot simply be
+rewritten for macOS.**
+The macOS build was telling users about the Windows Registry, the taskbar,
+`.exe` files and `Alt+X`. The fix is not to replace those strings — that
+breaks Windows — but `src/lib/platform.ts`, a single `IS_MAC` flag derived
+from the WebView user agent, with branches only where the platforms
+genuinely diverge. Prefer wording that is true on both ("log in") over a
+branch. Two claims in that file were wrong on *both* platforms and had
+survived unnoticed: the log is not written "next to the executable" (it
+goes to the OS config dir), and the plugins folder hint named
+`ClipToAll.exe` while `plugins_dir()` resolves inside the `.app` bundle on
+macOS. **Lesson: a platform sweep is also a good moment to check whether
+the text was ever true.**
+
 ---
 
 ## 7. Known gaps

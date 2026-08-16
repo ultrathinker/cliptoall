@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store';
+import { IS_MAC } from '../platform';
 
 export interface AppSettings {
   imagePrefix: string;
@@ -26,9 +27,17 @@ export interface AppSettings {
   jpegQuality: number;
 }
 
+// Frontend pre-load placeholder. The real defaults come from the Rust side
+// (AppSettings::default in src-tauri/src/commands/settings.rs) via the
+// load_settings IPC, so this only flashes for the moment between store
+// creation and the first IPC round-trip — but that flash is visible, so the
+// hotkey default at least has to match the platform to avoid showing
+// "Alt+X" briefly on a Mac.
 export const defaultSettings: AppSettings = {
   imagePrefix: 'cta_',
-  autorun: true,
+  // Must match AppSettings::default() in commands/settings.rs, which is off on
+  // macOS: a login item should be something the user asked for.
+  autorun: !IS_MAC,
   autoclose: true,
   amazonAccessKeyId: '',
   amazonSecretAccessKey: '',
@@ -38,8 +47,8 @@ export const defaultSettings: AppSettings = {
   loggingOn: false,
   storageType: 'gdrive',
   googleDriveFolder: 'public-images',
-  downscaleForDpi: true,
-  outputMode: 'resize',
+  downscaleForDpi: !IS_MAC,
+  outputMode: IS_MAC ? 'exif' : 'resize',
   theme: 'crimson',
   resultsWidth: 850,
   // Matches RESULTS_MIN_HEIGHT in src-tauri/src/main.rs — below that, the
@@ -48,7 +57,7 @@ export const defaultSettings: AppSettings = {
   // this pre-load fallback doesn't visually differ from the enforced floor.
   resultsHeight: 210,
   skipUploadInCopyMode: true,
-  captureHotkey: 'Alt+X',
+  captureHotkey: IS_MAC ? 'Ctrl+Cmd+X' : 'Alt+X',
   escapeHidesResults: true,
   defaultMode: 'image',
   jpegQuality: 85,

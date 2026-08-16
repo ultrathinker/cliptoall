@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount, flushSync } from 'svelte';
-  import { readImageBase64, saveImageBase64, saveImageToFile } from '../lib/api';
+  import { readImageBase64, saveImageBase64, saveImageToFile, saveImageToPath } from '../lib/api';
+  import { save as showSaveDialog } from '@tauri-apps/plugin-dialog';
   import { showAlert } from '../lib/stores/alert.svelte';
+  import { IS_MAC } from '../lib/platform';
   import iconPencil from '../assets/icon_pencil.png';
   import iconPencilActive from '../assets/icon_pencil_active.png';
   import iconRect from '../assets/icon_rect.png';
@@ -422,7 +424,32 @@
       const dataUrl = canvas.toDataURL('image/png');
       const base64 = dataUrl.replace(/^data:image\/png;base64,/, '');
       const tempPath = await saveImageBase64(base64);
-      const savedPath = await saveImageToFile(tempPath, outputScale);
+      let savedPath: string | null;
+      if (IS_MAC) {
+        // Phase 3 / TASK 3: macOS uses the tauri-plugin-dialog `save()`
+        // panel (NSSavePanel) to resolve the destination, then hands that
+        // path to Rust via `save_image_to_path`. The Windows path keeps
+        // the Win32 OFN dialog inside `save_image_to_file` and is
+        // unchanged.
+        const tempFileName = tempPath.split(/[/\\]/).pop() || 'screenshot.jpg';
+        const destPath = await showSaveDialog({
+          defaultPath: tempFileName,
+          filters: [
+            { name: 'JPEG', extensions: ['jpg', 'jpeg'] },
+            { name: 'PNG', extensions: ['png'] },
+          ],
+        });
+        // `save()` returns null when the user cancels the panel — treat
+        // that as a normal outcome (no alert, no error), matching the
+        // Windows command's `if !ok.as_bool() { return Ok(None); }` path.
+        if (!destPath) {
+          savedPath = null;
+        } else {
+          savedPath = await saveImageToPath(tempPath, outputScale, destPath);
+        }
+      } else {
+        savedPath = await saveImageToFile(tempPath, outputScale);
+      }
       if (savedPath) {
         console.log('Saved to:', savedPath);
       }

@@ -9,6 +9,10 @@ mod geometry;
 mod overlay;
 #[cfg(not(windows))]
 mod overlay_web;
+/// The plugin manager is gated by the `plugins` Cargo feature (TASK B /
+/// Phase 4a). The Mac App Store edition compiles this out with
+/// `--no-default-features`; every reference below is similarly cfg-gated.
+#[cfg(windows)]
 mod plugins;
 #[cfg(not(windows))]
 mod results_spare;
@@ -138,8 +142,14 @@ fn apply_window_icons(window: &tauri::WebviewWindow) {
 }
 
 /// No-op on macOS: the .icns bundle icon covers Dock/window chrome, no
-/// per-context caption/taskbar icon fixup needed.
+/// per-context caption/taskbar icon fixup needed. The trait is kept
+/// platform-symmetric so the call sites in `handle_overlay_result` and
+/// `setup` (both `#[cfg(windows)]`-gated) don't have to diverge, but no
+/// macOS code path actually invokes it — silence the dead-code lint rather
+/// than delete the function, since the whole point of having a parallel
+/// stub is to keep the call sites identical across `cfg(windows)`.
 #[cfg(not(windows))]
+#[allow(dead_code)]
 fn apply_window_icons(_window: &tauri::WebviewWindow) {}
 
 /// Stores image paths and flags for newly created results windows.
@@ -215,53 +225,69 @@ fn handle_overlay_result(
 ) {
     match overlay_result {
         Some(geometry::OverlayResult::PluginCall { path, function_id }) => {
-            log(&format!("  plugin call: {} → {} | +{}ms", path, function_id, t0.elapsed().as_millis()));
+            // Keep the variant and the arm regardless so the match stays
+            // exhaustive on every feature combo. The body is what flips:
+            // with `--no-default-features` the App Store build still receives
+            // an `OverlayResult::PluginCall` (the variant is in `geometry`,
+            // shared), but has no `plugins` module to dispatch to — log and
+            // drop. In practice the overlay never sends one (no key bindings
+            // are registered when plugins are off), but if a future change
+            // forgot to gate the JS side we want a clear log line, not a panic.
+            #[cfg(windows)]
+            {
+                log(&format!("  plugin call: {} → {} | +{}ms", path, function_id, t0.elapsed().as_millis()));
 
-            // Load plugin settings from config (owned, so we can run the
-            // oneshot call WITHOUT holding the manager mutex).
-            let plugin_configs = commands::plugins::load_plugin_configs_sync();
-            let plugin_settings: Option<String> = plugin_configs.iter()
-                .find(|c| c.path == path)
-                .and_then(|c| if c.settings.is_empty() { None } else { Some(c.settings.clone()) });
+                // Load plugin settings from config (owned, so we can run the
+                // oneshot call WITHOUT holding the manager mutex).
+                let plugin_configs = commands::plugins::load_plugin_configs_sync();
+                let plugin_settings: Option<String> = plugin_configs.iter()
+                    .find(|c| c.path == path)
+                    .and_then(|c| if c.settings.is_empty() { None } else { Some(c.settings.clone()) });
 
-            if let Some(state) = app.try_state::<plugins::PluginManagerState>() {
-                // Decide dispatch under a SHORT lock (just a map lookup)...
-                let target = state.0.lock().resolve_call(&path);
-                // ...then execute. Oneshot runs lock-free (bounded by its own
-                // 30s timeout) so a hung script can't wedge the mutex that the
-                // hotkey / Plugins tab / Exit all need. Daemon runs under the
-                // lock but is bounded by its 10s watchdog.
-                let result = match target {
-                    Some(plugins::CallTarget::Oneshot { plugin_type }) => Some(
-                        plugins::PluginManager::run_oneshot(&path, plugin_type, &function_id, plugin_settings.as_deref())
-                    ),
-                    Some(plugins::CallTarget::Daemon) => Some(
-                        state.0.lock().call_function_daemon(&path, &function_id, plugin_settings.as_deref())
-                    ),
-                    None => {
-                        log(&format!("  plugin not running: {}", path));
-                        None
-                    }
-                };
-                match result {
-                    Some(Ok(result)) => {
-                        log(&format!("  plugin result: {:?} | +{}ms", result.status, t0.elapsed().as_millis()));
-                        if result.status == "error" {
-                            if let Some(msg) = &result.message {
-                                log(&format!("  plugin error: {}", msg));
-                            }
-                            #[cfg(windows)]
-                            if result.action.as_deref() == Some("admin_required")
-                                && crate::aumid::show_admin_dialog() {
-                                crate::aumid::restart_as_admin();
+                if let Some(state) = app.try_state::<plugins::PluginManagerState>() {
+                    // Decide dispatch under a SHORT lock (just a map lookup)...
+                    let target = state.0.lock().resolve_call(&path);
+                    // ...then execute. Oneshot runs lock-free (bounded by its own
+                    // 30s timeout) so a hung script can't wedge the mutex that the
+                    // hotkey / Plugins tab / Exit all need. Daemon runs under the
+                    // lock but is bounded by its 10s watchdog.
+                    let result = match target {
+                        Some(plugins::CallTarget::Oneshot { plugin_type }) => Some(
+                            plugins::PluginManager::run_oneshot(&path, plugin_type, &function_id, plugin_settings.as_deref())
+                        ),
+                        Some(plugins::CallTarget::Daemon) => Some(
+                            state.0.lock().call_function_daemon(&path, &function_id, plugin_settings.as_deref())
+                        ),
+                        None => {
+                            log(&format!("  plugin not running: {}", path));
+                            None
+                        }
+                    };
+                    match result {
+                        Some(Ok(result)) => {
+                            log(&format!("  plugin result: {:?} | +{}ms", result.status, t0.elapsed().as_millis()));
+                            if result.status == "error" {
+                                if let Some(msg) = &result.message {
+                                    log(&format!("  plugin error: {}", msg));
+                                }
+                                #[cfg(windows)]
+                                if result.action.as_deref() == Some("admin_required")
+                                    && crate::aumid::show_admin_dialog() {
+                                    crate::aumid::restart_as_admin();
+                                }
                             }
                         }
+                        Some(Err(e)) => {
+                            log(&format!("  plugin call failed: {} | +{}ms", e, t0.elapsed().as_millis()));
+                        }
+                        None => {}
                     }
-                    Some(Err(e)) => {
-                        log(&format!("  plugin call failed: {} | +{}ms", e, t0.elapsed().as_millis()));
-                    }
-                    None => {}
                 }
+            }
+            #[cfg(not(windows))]
+            {
+                log(&format!("  plugin call {} → {} ignored: plugins feature is off", path, function_id));
+                let _ = (path, function_id);
             }
         }
         Some(geometry::OverlayResult::Selection(sel)) => {
@@ -393,13 +419,23 @@ fn start_capture(app: AppHandle) {
         };
         log(&format!("  capture_to_memory OK ({}x{}) | +{}ms", capture.width, capture.height, t0.elapsed().as_millis()));
 
-        // 2. Build plugin key map for the overlay
+        // 2. Build plugin key map for the overlay. Gated by the `plugins`
+        // feature (TASK B): when plugins are off, no hotkey bindings exist,
+        // so the overlay receives an empty map and `overlay_plugin_call` is
+        // never reached.
         let key_map = {
-            if let Some(state) = app.try_state::<plugins::PluginManagerState>() {
-                let mgr = state.0.lock();
-                overlay::build_vk_key_map(mgr.get_key_map())
-            } else {
-                std::collections::HashMap::new()
+            #[cfg(windows)]
+            {
+                if let Some(state) = app.try_state::<plugins::PluginManagerState>() {
+                    let mgr = state.0.lock();
+                    overlay::build_vk_key_map(mgr.get_key_map())
+                } else {
+                    std::collections::HashMap::new()
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                std::collections::HashMap::<String, (String, String)>::new()
             }
         };
 
@@ -437,6 +473,56 @@ fn start_capture(app: AppHandle) {
     overlay_web::mark_capture_start();
     log("=== CAPTURE START ===");
 
+    // Screen-Recording TCC preflight (Phase 3 / TASK 1). Without the grant,
+    // `SCScreenshotManager.captureImage` silently returns a black buffer and
+    // the app looks broken — the single strongest "unfinished" signal an App
+    // Store reviewer hits on first launch. We check here, on the hotkey
+    // path, so a user who never tries to capture is never prompted. The
+    // existing capture-failure path remains as the fallback for the rare
+    // case where TCC has been revoked between preflight and capture.
+    #[cfg(target_os = "macos")]
+    {
+        if !sck_capture::screen_capture_access_granted() {
+            log("  preflight: Screen Recording not granted — requesting");
+            // Ask the system FIRST, before pointing the user at System
+            // Settings. This is not just politeness: an app is listed under
+            // Privacy & Security → Screen Recording only once it has actually
+            // requested the grant. Sending the user to that pane without
+            // requesting can show them a list our app is not in — which reads
+            // as broken far worse than the original silent failure did.
+            //
+            // The call also raises the system's own prompt on a first run, and
+            // returns immediately (the user's later answer does not change the
+            // return value), so it is safe on this thread.
+            if sck_capture::request_screen_capture_access() {
+                // Already granted between preflight and request — nothing to
+                // explain, fall through and capture.
+                log("  preflight: granted on request, continuing");
+            } else {
+                // Make sure the user can SEE the explanation: the main window
+                // is hidden by default (this is a tray app), so without
+                // showing it the emitted event would fire on a hidden WebView
+                // and the dialog would never paint.
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = main.show();
+                    let _ = main.set_focus();
+                }
+                let _ = app.emit(
+                    "screen-recording-required",
+                    serde_json::json!({
+                        // Deep link to the Screen Recording privacy pane. If
+                        // the schema changes in a future macOS release the
+                        // fallback is the parent "Privacy & Security" pane at
+                        // `x-apple.systempreferences:com.apple.preference.security`.
+                        "settings_url": "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+                    }),
+                );
+                CAPTURE_IN_PROGRESS.store(false, Ordering::SeqCst);
+                return;
+            }
+        }
+    }
+
     std::thread::spawn(move || {
         log(&format!("  calling capture_to_memory... | +{}ms", t0.elapsed().as_millis()));
         let capture = match commands::capture::capture_to_memory() {
@@ -450,11 +536,18 @@ fn start_capture(app: AppHandle) {
         log(&format!("  capture_to_memory OK ({}x{}) | +{}ms", capture.width, capture.height, t0.elapsed().as_millis()));
 
         let key_map = {
-            if let Some(state) = app.try_state::<plugins::PluginManagerState>() {
-                let mgr = state.0.lock();
-                mgr.get_key_map()
-            } else {
-                std::collections::HashMap::new()
+            #[cfg(windows)]
+            {
+                if let Some(state) = app.try_state::<plugins::PluginManagerState>() {
+                    let mgr = state.0.lock();
+                    mgr.get_key_map()
+                } else {
+                    std::collections::HashMap::new()
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                std::collections::HashMap::<String, (String, String)>::new()
             }
         };
 
@@ -675,10 +768,20 @@ fn main() {
         std::process::exit(code);
     }
 
-    tauri::Builder::default()
+    // Plugin manager state is gated by the `plugins` Cargo feature (TASK B /
+// Phase 4a). The cfg attribute cannot sit directly on a `.manage(...)` call
+// in a builder chain (the parser attaches it to the prior statement), so the
+// conditional manage is hoisted into its own `let` binding instead.
+    let builder = tauri::Builder::default()
         .manage(PendingResults(Mutex::new(HashMap::new())))
-        .manage(commands::gdrive_pool::init_pool())
-        .manage(plugins::PluginManagerState(Mutex::new(plugins::PluginManager::new())))
+        .manage(commands::gdrive_pool::init_pool());
+    let builder = {
+        #[cfg(windows)]
+        { builder.manage(plugins::PluginManagerState(Mutex::new(plugins::PluginManager::new()))) }
+        #[cfg(not(windows))]
+        { builder }
+    };
+    builder
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
@@ -686,8 +789,25 @@ fn main() {
             }
         }))
         .plugin(tauri_plugin_opener::init())
+        // Save-As native panel on macOS — see commands/capture.rs's
+        // `save_image_to_path` for the consumer. The frontend picks the
+        // destination via the dialog plugin's `save()` and then invokes the
+        // Rust command with that path. No-op on Windows, where the existing
+        // Win32 OFN dialog inside `save_image_to_file` stays in charge.
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
+            // Menu-bar utility, not a windowed application: no Dock icon and no
+            // Cmd+Tab entry. macOS defaults every app to `Regular`, which keeps
+            // it in the Dock for as long as the process lives, regardless of
+            // whether any window is open — unlike Windows, where taskbar
+            // presence follows the windows. A tray app has to ask for
+            // `Accessory` explicitly.
+            //
+            // Windows and Linux have no equivalent concept, hence the gate.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             // Load settings FIRST so LOGGING_ON is set before anything else runs —
             // then the lifecycle breadcrumbs below actually write WHEN the user has
             // the "Write to Log File" option on (they all go through log(), which is
@@ -751,6 +871,7 @@ fn main() {
                             // still exit. try_lock skips the stop rather than hanging; the
                             // plugin children die anyway via the Job Object's
                             // KILL_ON_JOB_CLOSE when this process exits.
+                            #[cfg(windows)]
                             if let Some(state) = app.try_state::<plugins::PluginManagerState>() {
                                 if let Some(mut mgr) = state.0.try_lock() {
                                     plugins::PluginManager::stop_all(&mut mgr);
@@ -846,6 +967,12 @@ fn main() {
             // leave the tray drawn but unresponsive: the OS shows the menu, but no
             // event is processed, so "Exit does nothing". Doing it off-thread keeps
             // the tray/hotkey live from the first moment.
+            //
+            // The plugin startup block is cfg-gated by the `plugins` Cargo feature
+            // (TASK B / Phase 4a). Temp cleanup is shared and stays unconditional;
+            // when plugins are off the handle is unused but the closure still runs
+            // the cleanup, so suppress the unused warning at the binding.
+            #[allow(unused_variables)]
             let bg_app = app.handle().clone();
             std::thread::spawn(move || {
                 log("startup(bg): begin");
@@ -853,50 +980,53 @@ fn main() {
                 commands::capture::cleanup_temp_files();
                 log("startup(bg): temp cleanup done");
 
-                // Start enabled plugins from saved config.
-                let plugin_configs = commands::plugins::load_plugin_configs_sync();
-                let plugin_state = bg_app.state::<plugins::PluginManagerState>();
-                let mut mgr = plugin_state.0.lock();
-                let enabled = plugin_configs.iter().filter(|c| c.enabled).count();
-                log(&format!("startup(bg): starting {} enabled plugin(s)", enabled));
-                for cfg in &plugin_configs {
-                    if !cfg.enabled { continue; }
-                    if let Err(e) = commands::plugins::ensure_in_plugins_dir(
-                        std::path::Path::new(&cfg.path)
-                    ) {
-                        log(&format!("Plugin skipped due to invalid path {}: {}", cfg.path, e));
-                        continue;
-                    }
-
-                    let (ptype, mode) = plugins::detect_plugin_type(&cfg.path);
-                    match ptype {
-                        plugins::PluginType::Exe => {
-                            log(&format!("startup(bg): starting exe plugin {}", cfg.path));
-                            match mgr.start_plugin(&cfg.path, &cfg.key_bindings) {
-                                Ok(hello) => log(&format!("Plugin started: {} ({})", hello.name, cfg.path)),
-                                Err(e) => log(&format!("Plugin failed to start {}: {}", cfg.path, e)),
-                            }
+                #[cfg(windows)]
+                {
+                    // Start enabled plugins from saved config.
+                    let plugin_configs = commands::plugins::load_plugin_configs_sync();
+                    let plugin_state = bg_app.state::<plugins::PluginManagerState>();
+                    let mut mgr = plugin_state.0.lock();
+                    let enabled = plugin_configs.iter().filter(|c| c.enabled).count();
+                    log(&format!("startup(bg): starting {} enabled plugin(s)", enabled));
+                    for cfg in &plugin_configs {
+                        if !cfg.enabled { continue; }
+                        if let Err(e) = commands::plugins::ensure_in_plugins_dir(
+                            std::path::Path::new(&cfg.path)
+                        ) {
+                            log(&format!("Plugin skipped due to invalid path {}: {}", cfg.path, e));
+                            continue;
                         }
-                        _ => {
-                            // Script plugin — read metadata, then start
-                            log(&format!("startup(bg): starting script plugin {}", cfg.path));
-                            if let Ok(content) = std::fs::read_to_string(&cfg.path) {
-                                if let Some((hello, _)) = plugins::parse_script_metadata(&content, ptype) {
-                                    match mgr.start_plugin_ext(&cfg.path, ptype, mode, &hello, &cfg.key_bindings) {
-                                        Ok(_) => log(&format!("Script plugin started: {} ({})", hello.name, cfg.path)),
-                                        Err(e) => log(&format!("Script plugin failed to start {}: {}", cfg.path, e)),
+
+                        let (ptype, mode) = plugins::detect_plugin_type(&cfg.path);
+                        match ptype {
+                            plugins::PluginType::Exe => {
+                                log(&format!("startup(bg): starting exe plugin {}", cfg.path));
+                                match mgr.start_plugin(&cfg.path, &cfg.key_bindings) {
+                                    Ok(hello) => log(&format!("Plugin started: {} ({})", hello.name, cfg.path)),
+                                    Err(e) => log(&format!("Plugin failed to start {}: {}", cfg.path, e)),
+                                }
+                            }
+                            _ => {
+                                // Script plugin — read metadata, then start
+                                log(&format!("startup(bg): starting script plugin {}", cfg.path));
+                                if let Ok(content) = std::fs::read_to_string(&cfg.path) {
+                                    if let Some((hello, _)) = plugins::parse_script_metadata(&content, ptype) {
+                                        match mgr.start_plugin_ext(&cfg.path, ptype, mode, &hello, &cfg.key_bindings) {
+                                            Ok(_) => log(&format!("Script plugin started: {} ({})", hello.name, cfg.path)),
+                                            Err(e) => log(&format!("Script plugin failed to start {}: {}", cfg.path, e)),
+                                        }
+                                    } else {
+                                        log(&format!("Script plugin has no valid metadata: {}", cfg.path));
                                     }
                                 } else {
-                                    log(&format!("Script plugin has no valid metadata: {}", cfg.path));
+                                    log(&format!("Failed to read script plugin: {}", cfg.path));
                                 }
-                            } else {
-                                log(&format!("Failed to read script plugin: {}", cfg.path));
                             }
                         }
                     }
+                    drop(mgr);
+                    log("startup(bg): plugin startup complete");
                 }
-                drop(mgr);
-                log("startup(bg): plugin startup complete");
             });
 
             // Start GDrive pre-allocation daemon after 15s delay (if configured)
@@ -941,6 +1071,8 @@ fn main() {
             commands::capture::read_image_base64,
             commands::capture::save_image_base64,
             commands::capture::save_image_to_file,
+            #[cfg(target_os = "macos")]
+            commands::capture::save_image_to_path,
             commands::upload_s3::upload_to_s3,
             commands::upload_gdrive::gdrive_authorize,
             commands::upload_gdrive::gdrive_upload_pooled,
@@ -952,15 +1084,25 @@ fn main() {
             setup_editor_window,
             restore_results_window,
             update_hotkey,
+            #[cfg(windows)]
             commands::plugins::discover_plugins,
+            #[cfg(windows)]
             commands::plugins::apply_plugin_config,
+            #[cfg(windows)]
             commands::plugins::load_plugin_configs,
+            #[cfg(windows)]
             commands::plugins::run_script,
+            #[cfg(windows)]
             commands::plugins::run_script_in_terminal,
+            #[cfg(windows)]
             commands::plugins::save_script,
+            #[cfg(windows)]
             commands::plugins::delete_script,
+            #[cfg(windows)]
             commands::plugins::check_runtime,
+            #[cfg(windows)]
             commands::plugins::read_script,
+            #[cfg(windows)]
             commands::plugins::precompile_script,
             #[cfg(not(windows))]
             overlay_web::overlay_get_meta,
@@ -969,6 +1111,7 @@ fn main() {
             #[cfg(not(windows))]
             overlay_web::overlay_finish,
             #[cfg(not(windows))]
+            #[cfg(windows)]
             overlay_web::overlay_plugin_call,
             #[cfg(not(windows))]
             overlay_web::overlay_cancel,

@@ -1,7 +1,13 @@
-//! Web overlay for macOS (Phase 3) — a transparent WebviewWindow running a
-//! Svelte canvas (src/windows/OverlayWeb.svelte) in place of the native
-//! Win32 overlay. See docs/macos-port/OVERLAY-SPEC.md for the visual and
-//! behavioral contract this is built against.
+//! Web overlay for macOS (Phase 3) — a Svelte canvas
+//! (src/windows/OverlayWeb.svelte) running inside an opaque WebviewWindow, in
+//! place of the native Win32 overlay. The window's content is the dimmed
+//! screenshot drawn onto a canvas covering the whole screen (`100vw` ×
+//! `100vh`, `position: fixed`, `inset: 0` in OverlayWeb.svelte), so it is
+//! already opaque edge to edge — no NSWindow transparency is needed and
+//! `macos-private-api` is intentionally NOT enabled (see
+//! docs/macos-port/APP-STORE-PLAN.md §1; that flag would block the App Store
+//! build). See docs/macos-port/OVERLAY-SPEC.md for the visual and behavioral
+//! contract this is built against.
 //!
 //! Single-monitor only for now (matches `capture::capture_to_memory`'s
 //! current scope — see its doc comment).
@@ -114,6 +120,7 @@ pub fn overlay_finish(window: tauri::Window, x: i32, y: i32, width: i32, height:
 }
 
 #[tauri::command]
+#[cfg(windows)]
 pub fn overlay_plugin_call(window: tauri::Window, path: String, function_id: String) -> Result<(), String> {
     require_overlay_window(&window)?;
     send_result(Some(OverlayResult::PluginCall { path, function_id }))
@@ -196,7 +203,17 @@ pub fn prewarm(app: &tauri::AppHandle) {
         .position(left, top)
         .inner_size(w, h)
         .decorations(false)
-        .transparent(true)
+        // Intentionally NOT transparent — the overlay's visible content is the
+        // dimmed screenshot drawn onto a full-window canvas (OverlayWeb.svelte),
+        // already opaque edge to edge. NSWindow transparency was only ever here
+        // to let the live desktop show through during the wipe-and-reshow gap
+        // between captures; with an opaque window the App.svelte <main> /
+        // app.css `body.overlay-window` background is what would show during
+        // that gap instead. The 400 ms fallback timer in `show_web_overlay`
+        // still relies on the window being initially hidden, so removing
+        // transparency does not change that path. Removing this call is what
+        // lets us drop Tauri's `macos-private-api` Cargo feature, which is
+        // the App Store blocker.
         .always_on_top(true)
         .resizable(false)
         .skip_taskbar(true)
@@ -279,7 +296,7 @@ pub fn show_web_overlay(
                 .position(left, top)
                 .inner_size(logical_w, logical_h)
                 .decorations(false)
-                .transparent(true)
+                // See prewarm() above for why this is not `.transparent(true)`.
                 .always_on_top(true)
                 .resizable(false)
                 .skip_taskbar(true)

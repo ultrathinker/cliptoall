@@ -14,8 +14,15 @@ pub struct SelectionRect {
 /// hotkey pressed while the overlay was up, or (via `None` at the call site)
 /// a cancel. Shared so `main.rs`'s post-selection handling (crop/save/
 /// clipboard/results-window/plugin dispatch) is identical on every platform.
+///
+/// `PluginCall` is constructed only when the `plugins` Cargo feature is on
+/// (see the `#[cfg]` on `handle_overlay_result`'s arm in main.rs), so silence
+/// the dead-code lint on the no-plugins build: the variant stays regardless
+/// because removing it would force `handle_overlay_result` to diverge between
+/// the two configurations.
 #[derive(Debug)]
 pub enum OverlayResult {
     Selection(SelectionRect),
+    #[allow(dead_code)]
     PluginCall { path: String, function_id: String },
 }

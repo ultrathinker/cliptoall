@@ -3,6 +3,7 @@
   import { getVersion } from '@tauri-apps/api/app';
   import { onMount } from 'svelte';
   import { settings } from '../lib/stores/settings';
+  import { displayHotkey } from '../lib/platform';
 
   let { onClose }: { onClose: () => void } = $props();
   let version = $state('');
@@ -22,7 +23,7 @@
     <p class="line email">universeissilent42@gmail.com</p>
     <p class="line version">Version  {version}</p>
     <div class="spacer"></div>
-    <p class="line hint">Press {$settings.captureHotkey} to capture  &middot;  double-press to toggle mode</p>
+    <p class="line hint">Press {displayHotkey($settings.captureHotkey)} to capture  &middot;  double-press to toggle mode</p>
   </div>
 </div>
 

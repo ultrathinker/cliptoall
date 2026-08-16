@@ -49,7 +49,12 @@ pub struct PluginResult {
     pub status: String,
     #[serde(default)]
     pub message: Option<String>,
+    // Read only on Windows (see main.rs's admin-required dispatch), so the
+    // macOS build marks the field dead. Keep the field rather than delete
+    // it: plugins running on Windows may still emit it, and removing the
+    // deserialized field would silently drop the value rather than ignore it.
     #[serde(default)]
+    #[allow(dead_code)]
     pub action: Option<String>,
 }
 
