@@ -59,9 +59,12 @@ pub struct AppSettings {
 }
 
 fn default_results_width() -> f64 { 850.0 }
-fn default_results_height() -> f64 { 190.0 }
+fn default_results_height() -> f64 { crate::RESULTS_MIN_HEIGHT }
 fn default_true() -> bool { true }
+#[cfg(windows)]
 fn default_capture_hotkey() -> String { "Alt+X".to_string() }
+#[cfg(not(windows))]
+fn default_capture_hotkey() -> String { "Cmd+X".to_string() }
 fn default_mode_image() -> String { "image".to_string() }
 fn default_jpeg_quality() -> u8 { 85 }
 /// Empty sentinel: an absent output_mode is migrated from downscale_for_dpi on load.
@@ -75,7 +78,10 @@ fn validate_settings(s: &mut AppSettings) {
     // Window size: keep within something a real monitor could show. NaN/inf
     // collapse to the default via the finite check.
     s.results_width = if s.results_width.is_finite() { s.results_width.clamp(200.0, 20000.0) } else { default_results_width() };
-    s.results_height = if s.results_height.is_finite() { s.results_height.clamp(100.0, 20000.0) } else { default_results_height() };
+    // Lower bound matches RESULTS_MIN_HEIGHT (main.rs) — below that, the
+    // window's own min_inner_size clamps it anyway, but a stored value that
+    // doesn't match what actually renders is confusing to debug later.
+    s.results_height = if s.results_height.is_finite() { s.results_height.clamp(crate::RESULTS_MIN_HEIGHT, 20000.0) } else { default_results_height() };
     // JPEG quality is 1..=100 (0 or >100 are meaningless to the encoder).
     s.jpeg_quality = s.jpeg_quality.clamp(1, 100);
     // Enum whitelists — must match the frontend option sets exactly.
@@ -151,9 +157,9 @@ impl Default for AppSettings {
             output_mode: "resize".to_string(),
             theme: "crimson".to_string(),
             results_width: 850.0,
-            results_height: 190.0,
+            results_height: crate::RESULTS_MIN_HEIGHT,
             skip_upload_in_copy_mode: true,
-            capture_hotkey: "Alt+X".to_string(),
+            capture_hotkey: default_capture_hotkey(),
             escape_hides_results: true,
             default_mode: "image".to_string(),
             jpeg_quality: 85,

@@ -5,7 +5,7 @@
   import { writeText } from '@tauri-apps/plugin-clipboard-manager';
   import { settings } from '../lib/stores/settings';
   import { session, startUpload, copyLink, currentImagePath } from '../lib/stores/session.svelte';
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
 
   let { onEdit }: { onEdit?: () => void } = $props();
 
@@ -18,6 +18,14 @@
   let previewDataUrl = $state('');
   let mounted = true;
   let resizeSaveTimer: number | undefined;
+  let containerEl: HTMLDivElement;
+  let cardEl: HTMLDivElement;
+  let contentObserver: ResizeObserver | undefined;
+  /// Width floor is genuinely fixed (the button column + preview box are
+  /// fixed-width); the HEIGHT floor starts at the Rust-side value and is
+  /// then raised to whatever the content measures — see ensureContentFits.
+  const MIN_WIDTH = 620;
+  let minHeight = 210;
   let unlistenResize: (() => void) | undefined;
   let showErrorPopup = $state(false);
   let copyLinkLabel = $state('Copy link');
@@ -71,7 +79,8 @@
     window.addEventListener('keydown', handleKeydown);
 
     const win = getCurrentWindow();
-    await win.setMinSize(new LogicalSize(600, 200));
+    // Height floor is MEASURED, not hardcoded — see ensureContentFits.
+    await win.setMinSize(new LogicalSize(MIN_WIDTH, minHeight));
 
     // Save window size on resize (debounced), skip if minimized
     unlistenResize = await win.onResized(async ({ payload: size }) => {
@@ -83,10 +92,23 @@
         const factor = await win.scaleFactor();
         const logicalW = size.width / factor;
         const logicalH = size.height / factor;
-        if (logicalW < 300 || logicalH < 100) return;
+        // Never persist a size below the measured floor.
+        if (logicalW < MIN_WIDTH || logicalH < minHeight) return;
         await saveResultsWindowSize(logicalW, logicalH);
       }, 500);
     });
+
+    // Measure as soon as Svelte has rendered. Deliberately NOT inside
+    // requestAnimationFrame: this component mounts while the window is still
+    // hidden, and rAF is suspended for hidden windows (see waitForPaint in
+    // App.svelte) — the callback would never run. Reading scrollHeight
+    // forces a synchronous layout, which IS computed while hidden, so the
+    // measurement is valid here. The observer then catches later changes
+    // (status line wrapping to a second line, the error "more" link, ...).
+    await tick();
+    await ensureContentFits();
+    contentObserver = new ResizeObserver(() => { ensureContentFits(); });
+    if (cardEl) contentObserver.observe(cardEl);
 
     // Load preview thumbnail of the current (possibly edited) image.
     const path = currentImagePath();
@@ -107,6 +129,7 @@
     if (intervalId) clearInterval(intervalId);
     if (resizeSaveTimer) clearTimeout(resizeSaveTimer);
     if (unlistenResize) unlistenResize();
+    contentObserver?.disconnect();
     window.removeEventListener('keydown', handleKeydown);
   });
 
@@ -199,10 +222,50 @@
     stopAutoclose();
     if (onEdit) onEdit();
   }
+
+  /// Grow the window (and raise its min size) until the card's content
+  /// actually fits.
+  ///
+  /// WHY MEASURED, NOT A CONSTANT: every previous attempt at this was a
+  /// hardcoded floor (600x200, then 620x210) derived by adding up CSS
+  /// pixel values by hand — and each one was still slightly too small, so
+  /// the bottom-most action button stayed clipped by
+  /// `.results-container`'s `overflow: hidden`. The real content height
+  /// depends on things a hand-count can't know: the platform's checkbox
+  /// and font metrics, whether the status line wraps to a second line,
+  /// whether the "more" error link is present. So instead of guessing the
+  /// number, ask the DOM what it actually is: `scrollHeight -
+  /// clientHeight` on the clipping container IS, by definition, exactly
+  /// how many pixels are being cut off. Add that to the current height and
+  /// the content fits — whatever the cause, on any platform, at any font
+  /// size. Self-correcting: it re-runs on resize/content change and
+  /// converges (once nothing overflows, overflow is 0 and it no-ops).
+  async function ensureContentFits() {
+    if (!containerEl || !cardEl) return;
+    const overflow = Math.max(
+      containerEl.scrollHeight - containerEl.clientHeight,
+      cardEl.scrollHeight - cardEl.clientHeight,
+    );
+    if (overflow <= 0) return;
+
+    const win = getCurrentWindow();
+    const factor = await win.scaleFactor();
+    const size = await win.innerSize(); // physical px
+    const curH = size.height / factor;
+    const curW = size.width / factor;
+    const needed = Math.ceil(curH + overflow);
+    if (needed <= minHeight) return; // already accounted for
+
+    minHeight = needed;
+    await win.setMinSize(new LogicalSize(MIN_WIDTH, minHeight));
+    if (curH < minHeight) {
+      await win.setSize(new LogicalSize(Math.max(curW, MIN_WIDTH), minHeight));
+    }
+  }
 </script>
 
-<div class="results-container">
-  <div class="results-card">
+<div class="results-container" bind:this={containerEl}>
+  <div class="results-card" bind:this={cardEl}>
     <div class="top-area">
       <!-- Left: URL + preview + status + search -->
       <div class="left-col">

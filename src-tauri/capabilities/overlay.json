@@ -1,0 +1,9 @@
+{
+  "identifier": "overlay-window",
+  "description": "Capabilities for the macOS web overlay window (Phase 3). Minimal: it never creates windows, never touches the clipboard/filesystem — Rust closes it via window.close() after overlay_finish/overlay_cancel/overlay_plugin_call, so it needs no window-control permissions of its own. Just enough to listen for the mode-toggle event from the hotkey's double-press handler (main.rs).",
+  "windows": ["overlay"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

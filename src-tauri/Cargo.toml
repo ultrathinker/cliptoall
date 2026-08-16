@@ -9,7 +9,11 @@ edition = "2021"
 tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
-tauri = { version = "2.0", features = ["tray-icon"] }
+# macos-private-api: needed for WebviewWindowBuilder::transparent() on macOS
+# (the web overlay, Phase 3). No-op on Windows — transparent() is already
+# available there unconditionally (tauri's own cfg is
+# `any(not(target_os = "macos"), feature = "macos-private-api")`).
+tauri = { version = "2.0", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-global-shortcut = "2.0"
 tauri-plugin-clipboard-manager = "2.0"
 tauri-plugin-single-instance = "2.0"

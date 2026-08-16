@@ -11,7 +11,11 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// Raw screenshot data kept in memory (no file I/O)
 pub struct CaptureData {
-    pub buffer: Vec<u8>,  // Raw BGRA pixels
+    /// Raw 4-bytes-per-pixel data in whichever order this platform's capture
+    /// backend natively produces: BGRA on Windows (GDI), RGBA on macOS
+    /// (CoreGraphics via xcap). Deliberately NOT normalized to one order at
+    /// capture time — see `crop_and_save_from_buffer`'s comment for why.
+    pub buffer: Vec<u8>,
     pub width: i32,
     pub height: i32,
     pub left: i32,
@@ -328,13 +332,14 @@ pub fn capture_to_memory() -> Result<CaptureData, String> {
     let height = img.height() as i32;
     crate::log(&format!("    [capture] xcap monitor={}x{} at ({},{}) | +{}ms", width, height, left, top, t0.elapsed().as_millis()));
 
-    // xcap hands back RGBA (image crate convention); CaptureData is documented
-    // and consumed (crop_and_save_from_buffer) as BGRA, matching what Windows'
-    // GDI path naturally produces — swap R/B per pixel to conform.
-    let mut buffer = Vec::with_capacity(img.as_raw().len());
-    for px in img.as_raw().chunks_exact(4) {
-        buffer.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
-    }
+    // Keep xcap's native RGBA order as-is — no channel-swap pass over the
+    // whole screen here. `crop_and_save_from_buffer` reads this buffer with
+    // platform-aware channel indices instead of everyone normalizing to one
+    // order at capture time (see its comment): that swap used to cost
+    // ~180ms on a 16M-pixel image, TWICE (once here, once again undoing it
+    // in overlay_web.rs for the browser canvas, which wants RGBA anyway).
+    // into_raw() also avoids a copy entirely — `img` is otherwise unused.
+    let buffer = img.into_raw();
 
     crate::log(&format!("    [capture] capture_to_memory done | +{}ms", t0.elapsed().as_millis()));
     Ok(CaptureData { buffer, width, height, left, top })
@@ -448,15 +453,26 @@ pub fn crop_and_save_from_buffer(
         return Err("Selection is outside the captured area".to_string());
     }
 
-    // Extract crop region and convert BGRA → RGB
+    // Extract crop region and drop the alpha channel. `data.buffer`'s pixel
+    // order is whatever this platform's capture backend natively produces —
+    // BGRA on Windows (GDI), RGBA on macOS (CoreGraphics via xcap) — rather
+    // than normalizing to one order at capture time and paying for a
+    // channel-swap pass over the whole screen on every single capture, only
+    // to (on macOS) undo that exact swap again for the web overlay's canvas,
+    // which wants RGBA anyway. This is the one place that needs to know
+    // which order it's reading.
+    #[cfg(windows)]
+    let (ri, gi, bi) = (2usize, 1usize, 0usize); // BGRA
+    #[cfg(not(windows))]
+    let (ri, gi, bi) = (0usize, 1usize, 2usize); // RGBA
     let mut rgb_buf = Vec::with_capacity(sel_w * sel_h * 3);
     for y in 0..sel_h {
         let src_y = (y0 + y) * sw * 4;
         for x in 0..sel_w {
             let offset = src_y + (x0 + x) * 4;
-            rgb_buf.push(data.buffer[offset + 2]); // R
-            rgb_buf.push(data.buffer[offset + 1]); // G
-            rgb_buf.push(data.buffer[offset]);     // B
+            rgb_buf.push(data.buffer[offset + ri]);
+            rgb_buf.push(data.buffer[offset + gi]);
+            rgb_buf.push(data.buffer[offset + bi]);
         }
     }
 

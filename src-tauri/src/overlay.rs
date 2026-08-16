@@ -23,13 +23,7 @@ pub fn invalidate_overlay() {
     }
 }
 
-pub use crate::geometry::SelectionRect;
-
-#[derive(Debug)]
-pub enum OverlayResult {
-    Selection(SelectionRect),
-    PluginCall { path: String, function_id: String },
-}
+pub use crate::geometry::{OverlayResult, SelectionRect};
 
 // SAFETY: OverlayState is only accessed from the overlay thread.
 // The copy_image_flag pointer points to a 'static AtomicBool which is Sync.

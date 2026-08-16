@@ -7,13 +7,16 @@ mod commands;
 mod geometry;
 #[cfg(windows)]
 mod overlay;
+#[cfg(not(windows))]
+mod overlay_web;
 mod plugins;
+#[cfg(not(windows))]
+mod results_spare;
 mod utils;
 
 use std::collections::HashMap;
 use parking_lot::Mutex; // non-poisoning; lock() returns the guard directly
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(windows)]
 use std::time::Instant;
 
 /// Prevents multiple overlays from stacking when hotkey is pressed rapidly.
@@ -29,7 +32,16 @@ pub static LOGGING_ON: AtomicBool = AtomicBool::new(false);
 pub static DEFAULT_MODE_IS_IMAGE: AtomicBool = AtomicBool::new(true);
 /// Tracks the currently registered global shortcut for unregister/reregister.
 static CURRENT_SHORTCUT: Mutex<Option<Shortcut>> = Mutex::new(None);
-#[cfg(windows)]
+/// Floor for the Results window's height — below this, the fixed-size
+/// content (120px preview box + 30px url input + paddings/gaps on the left,
+/// or four 30px action buttons on the right, whichever is taller) no longer
+/// fits and the bottom-most control gets visually clipped by
+/// `.results-container`'s `overflow: hidden` (all pixel values, not
+/// font-dependent, so this floor holds on every platform). The previous
+/// 190.0 was already below the ~200px this content actually needs; 210
+/// leaves a small margin. Single source of truth for both the window's
+/// `min_inner_size` (main.rs) and the saved-settings default (settings.rs).
+pub const RESULTS_MIN_HEIGHT: f64 = 210.0;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tauri::{AppHandle, Emitter, Manager,
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -181,14 +193,177 @@ pub fn log(msg: &str) {
     }
 }
 
-/// Capture screen, show native overlay, crop, then open a NEW results window.
-/// Placeholder until the macOS web overlay lands (PLAN.md Phase 3) — the
-/// hotkey is registered but capture is a no-op so the app still runs.
-#[cfg(not(windows))]
-fn start_capture(_app: AppHandle) {
-    log("start_capture: not yet implemented on macOS (web overlay pending, Phase 3)");
+/// Handle what the overlay (native Win32 on Windows, web on macOS) resolved
+/// to: run a plugin call, or crop+save+clipboard+open a results window for a
+/// selection, or just log a cancel. Shared between both platforms'
+/// `start_capture` so this dispatch can't drift between them — the geometry
+/// types (`geometry::OverlayResult`/`SelectionRect`) are already
+/// platform-agnostic, `overlay::OverlayResult` on Windows is a `pub use`
+/// re-export of the exact same type, not a distinct one.
+fn handle_overlay_result(
+    app: &AppHandle,
+    capture: &commands::capture::CaptureData,
+    overlay_result: Option<geometry::OverlayResult>,
+    captured_copy_image: bool,
+    t0: Instant,
+) {
+    match overlay_result {
+        Some(geometry::OverlayResult::PluginCall { path, function_id }) => {
+            log(&format!("  plugin call: {} → {} | +{}ms", path, function_id, t0.elapsed().as_millis()));
+
+            // Load plugin settings from config (owned, so we can run the
+            // oneshot call WITHOUT holding the manager mutex).
+            let plugin_configs = commands::plugins::load_plugin_configs_sync();
+            let plugin_settings: Option<String> = plugin_configs.iter()
+                .find(|c| c.path == path)
+                .and_then(|c| if c.settings.is_empty() { None } else { Some(c.settings.clone()) });
+
+            if let Some(state) = app.try_state::<plugins::PluginManagerState>() {
+                // Decide dispatch under a SHORT lock (just a map lookup)...
+                let target = state.0.lock().resolve_call(&path);
+                // ...then execute. Oneshot runs lock-free (bounded by its own
+                // 30s timeout) so a hung script can't wedge the mutex that the
+                // hotkey / Plugins tab / Exit all need. Daemon runs under the
+                // lock but is bounded by its 10s watchdog.
+                let result = match target {
+                    Some(plugins::CallTarget::Oneshot { plugin_type }) => Some(
+                        plugins::PluginManager::run_oneshot(&path, plugin_type, &function_id, plugin_settings.as_deref())
+                    ),
+                    Some(plugins::CallTarget::Daemon) => Some(
+                        state.0.lock().call_function_daemon(&path, &function_id, plugin_settings.as_deref())
+                    ),
+                    None => {
+                        log(&format!("  plugin not running: {}", path));
+                        None
+                    }
+                };
+                match result {
+                    Some(Ok(result)) => {
+                        log(&format!("  plugin result: {:?} | +{}ms", result.status, t0.elapsed().as_millis()));
+                        if result.status == "error" {
+                            if let Some(msg) = &result.message {
+                                log(&format!("  plugin error: {}", msg));
+                            }
+                            #[cfg(windows)]
+                            if result.action.as_deref() == Some("admin_required")
+                                && crate::aumid::show_admin_dialog() {
+                                crate::aumid::restart_as_admin();
+                            }
+                        }
+                    }
+                    Some(Err(e)) => {
+                        log(&format!("  plugin call failed: {} | +{}ms", e, t0.elapsed().as_millis()));
+                    }
+                    None => {}
+                }
+            }
+        }
+        Some(geometry::OverlayResult::Selection(sel)) => {
+            log(&format!("  selection: {}x{} at ({},{}) | +{}ms", sel.width, sel.height, sel.x, sel.y, t0.elapsed().as_millis()));
+
+            // Crop from memory buffer and save a LOSSLESS full-res PNG.
+            // output_scale = capture-monitor scale, applied only at output.
+            match commands::capture::crop_and_save_from_buffer(capture, &sel) {
+                Ok((image_path, output_scale)) => {
+                    log(&format!("  crop+save OK: {} | +{}ms", image_path, t0.elapsed().as_millis()));
+
+                    // Use the mode snapshotted when the overlay returned (3.17).
+                    let copy_image = captured_copy_image;
+                    if copy_image {
+                        log("  copy_image_mode: copying image to clipboard");
+                        if let Err(e) = commands::clipboard::copy_image_to_clipboard(image_path.clone(), output_scale) {
+                            log(&format!("  copy_image_to_clipboard failed: {}", e));
+                        }
+                    } else {
+                        // Normal mode: clear clipboard so stale image from previous hotkey-double-press doesn't linger
+                        commands::clipboard::clear_clipboard();
+                    }
+
+                    // Reuse a pre-warmed (hidden, already-booted) results
+                    // window if one is standing by — building a fresh
+                    // WebviewWindow costs ~1-2s of cold WKWebView startup,
+                    // which is exactly the "the results window takes a
+                    // second or two to appear" lag. Falls through to
+                    // building one when no spare exists (Windows never
+                    // pre-warms — its code path is unchanged — and on
+                    // macOS the very first capture can outrun the warmer).
+                    #[cfg(not(windows))]
+                    if let Some(label) = results_spare::take(app) {
+                        app.state::<PendingResults>().0.lock()
+                            .insert(label.clone(), PendingImage { path: image_path, copy_image_mode: copy_image, output_scale });
+                        let _ = app.emit_to(label.as_str(), "results-show", ());
+                        log(&format!("  reused pre-warmed window '{}' | +{}ms", label, t0.elapsed().as_millis()));
+                        // Immediately start warming the replacement for the
+                        // next capture, off-thread so it can't delay this one.
+                        let warm_app = app.clone();
+                        std::thread::spawn(move || results_spare::prewarm(&warm_app));
+                        log(&format!("=== CAPTURE TOTAL: {}ms ===", t0.elapsed().as_millis()));
+                        return;
+                    }
+
+                    // Store image path + flag and create a NEW results window
+                    let window_id = &uuid::Uuid::new_v4().to_string()[..8];
+                    let label = format!("results-{}", window_id);
+
+                    app.state::<PendingResults>().0.lock()
+                        .insert(label.clone(), PendingImage { path: image_path, copy_image_mode: copy_image, output_scale });
+
+                    // Load saved window size from settings
+                    let saved = commands::settings::load_settings_sync();
+                    let w = saved.results_width.max(620.0);
+                    let h = saved.results_height.max(RESULTS_MIN_HEIGHT);
+
+                    match WebviewWindowBuilder::new(
+                        app, &label, WebviewUrl::App("/".into())
+                    )
+                    .title("ClipToAll")
+                    .inner_size(w, h)
+                    .min_inner_size(620.0, RESULTS_MIN_HEIGHT)
+                    .center()
+                    .focused(true)
+                    // Created HIDDEN so the user never sees the WebView's blank
+                    // white page before Svelte paints. The frontend calls show()
+                    // once the themed UI is rendered (App.svelte). A fallback
+                    // below reveals it anyway if the frontend never signals.
+                    .visible(false)
+                    .build()
+                    {
+                        Ok(win) => {
+                            // Crisp per-size caption/taskbar icons (see winicon).
+                            #[cfg(windows)]
+                            apply_window_icons(&win);
+                            // Safety net: if the frontend fails to load / never
+                            // signals ready, show the window anyway after a short
+                            // delay so it can't stay invisible forever.
+                            let win_fallback = win.clone();
+                            tauri::async_runtime::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+                                if !win_fallback.is_visible().unwrap_or(true) {
+                                    let _ = win_fallback.show();
+                                    let _ = win_fallback.set_focus();
+                                }
+                            });
+                            log(&format!("  new window '{}' created (hidden; shown when ready) | +{}ms", label, t0.elapsed().as_millis()));
+                        }
+                        Err(e) => {
+                            log(&format!("  WINDOW CREATE FAILED: {} | +{}ms", e, t0.elapsed().as_millis()));
+                        }
+                    }
+
+                    log(&format!("=== CAPTURE TOTAL: {}ms ===", t0.elapsed().as_millis()));
+                }
+                Err(e) => {
+                    log(&format!("  CROP FAILED: {} | +{}ms", e, t0.elapsed().as_millis()));
+                }
+            }
+        }
+        None => {
+            log(&format!("  selection cancelled | +{}ms", t0.elapsed().as_millis()));
+        }
+    }
 }
 
+/// Capture screen, show native overlay, crop, then open a NEW results window.
 #[cfg(windows)]
 fn start_capture(app: AppHandle) {
     // Prevent stacking overlays when Alt+X is pressed rapidly
@@ -200,7 +375,6 @@ fn start_capture(app: AppHandle) {
     log("=== CAPTURE START ===");
 
     std::thread::spawn(move || {
-
         // 1. Capture screen to memory (no file I/O)
         log(&format!("  calling capture_to_memory... | +{}ms", t0.elapsed().as_millis()));
         let capture = match commands::capture::capture_to_memory() {
@@ -242,138 +416,54 @@ fn start_capture(app: AppHandle) {
         CAPTURE_IN_PROGRESS.store(false, Ordering::SeqCst);
         log(&format!("  native overlay returned | +{}ms", t0.elapsed().as_millis()));
 
-        match overlay_result {
-            Some(overlay::OverlayResult::PluginCall { path, function_id }) => {
-                log(&format!("  plugin call: {} → {} | +{}ms", path, function_id, t0.elapsed().as_millis()));
+        handle_overlay_result(&app, &capture, overlay_result, captured_copy_image, t0);
+    });
+}
 
-                // Load plugin settings from config (owned, so we can run the
-                // oneshot call WITHOUT holding the manager mutex).
-                let plugin_configs = commands::plugins::load_plugin_configs_sync();
-                let plugin_settings: Option<String> = plugin_configs.iter()
-                    .find(|c| c.path == path)
-                    .and_then(|c| if c.settings.is_empty() { None } else { Some(c.settings.clone()) });
+/// Capture screen, show the web overlay, crop, then open a NEW results window.
+#[cfg(not(windows))]
+fn start_capture(app: AppHandle) {
+    if CAPTURE_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+        return;
+    }
 
-                if let Some(state) = app.try_state::<plugins::PluginManagerState>() {
-                    // Decide dispatch under a SHORT lock (just a map lookup)...
-                    let target = state.0.lock().resolve_call(&path);
-                    // ...then execute. Oneshot runs lock-free (bounded by its own
-                    // 30s timeout) so a hung script can't wedge the mutex that the
-                    // hotkey / Plugins tab / Exit all need. Daemon runs under the
-                    // lock but is bounded by its 10s watchdog.
-                    let result = match target {
-                        Some(plugins::CallTarget::Oneshot { plugin_type }) => Some(
-                            plugins::PluginManager::run_oneshot(&path, plugin_type, &function_id, plugin_settings.as_deref())
-                        ),
-                        Some(plugins::CallTarget::Daemon) => Some(
-                            state.0.lock().call_function_daemon(&path, &function_id, plugin_settings.as_deref())
-                        ),
-                        None => {
-                            log(&format!("  plugin not running: {}", path));
-                            None
-                        }
-                    };
-                    match result {
-                        Some(Ok(result)) => {
-                            log(&format!("  plugin result: {:?} | +{}ms", result.status, t0.elapsed().as_millis()));
-                            if result.status == "error" {
-                                if let Some(msg) = &result.message {
-                                    log(&format!("  plugin error: {}", msg));
-                                }
-                                if result.action.as_deref() == Some("admin_required")
-                                    && crate::aumid::show_admin_dialog() {
-                                    crate::aumid::restart_as_admin();
-                                }
-                            }
-                        }
-                        Some(Err(e)) => {
-                            log(&format!("  plugin call failed: {} | +{}ms", e, t0.elapsed().as_millis()));
-                        }
-                        None => {}
-                    }
-                }
+    let t0 = Instant::now();
+    log("=== CAPTURE START ===");
+
+    std::thread::spawn(move || {
+        log(&format!("  calling capture_to_memory... | +{}ms", t0.elapsed().as_millis()));
+        let capture = match commands::capture::capture_to_memory() {
+            Ok(c) => c,
+            Err(e) => {
+                log(&format!("  CAPTURE FAILED: {} | +{}ms", e, t0.elapsed().as_millis()));
+                CAPTURE_IN_PROGRESS.store(false, Ordering::SeqCst);
+                return;
             }
-            Some(overlay::OverlayResult::Selection(sel)) => {
-                log(&format!("  selection: {}x{} at ({},{}) | +{}ms", sel.width, sel.height, sel.x, sel.y, t0.elapsed().as_millis()));
+        };
+        log(&format!("  capture_to_memory OK ({}x{}) | +{}ms", capture.width, capture.height, t0.elapsed().as_millis()));
 
-                // 3. Crop from memory buffer and save a LOSSLESS full-res PNG.
-                //    output_scale = capture-monitor scale, applied only at output.
-                match commands::capture::crop_and_save_from_buffer(&capture, &sel) {
-                    Ok((image_path, output_scale)) => {
-                        log(&format!("  crop+save OK: {} | +{}ms", image_path, t0.elapsed().as_millis()));
-
-                        // Use the mode snapshotted when the overlay returned (3.17).
-                        let copy_image = captured_copy_image;
-                        if copy_image {
-                            log("  copy_image_mode: copying image to clipboard");
-                            if let Err(e) = commands::clipboard::copy_image_to_clipboard(image_path.clone(), output_scale) {
-                                log(&format!("  copy_image_to_clipboard failed: {}", e));
-                            }
-                        } else {
-                            // Normal mode: clear clipboard so stale image from previous Alt+X+X doesn't linger
-                            commands::clipboard::clear_clipboard();
-                        }
-
-                        // 4. Store image path + flag and create a NEW results window
-                        let window_id = &uuid::Uuid::new_v4().to_string()[..8];
-                        let label = format!("results-{}", window_id);
-
-                        app.state::<PendingResults>().0.lock()
-                            .insert(label.clone(), PendingImage { path: image_path, copy_image_mode: copy_image, output_scale });
-
-                        // Load saved window size from settings
-                        let saved = commands::settings::load_settings_sync();
-                        let w = saved.results_width.max(620.0);
-                        let h = saved.results_height.max(190.0);
-
-                        match WebviewWindowBuilder::new(
-                            &app, &label, WebviewUrl::App("/".into())
-                        )
-                        .title("ClipToAll")
-                        .inner_size(w, h)
-                        .min_inner_size(620.0, 190.0)
-                        .center()
-                        .focused(true)
-                        // Created HIDDEN so the user never sees the WebView's blank
-                        // white page before Svelte paints. The frontend calls show()
-                        // once the themed UI is rendered (App.svelte). A fallback
-                        // below reveals it anyway if the frontend never signals.
-                        .visible(false)
-                        .build()
-                        {
-                            Ok(win) => {
-                                // Crisp per-size caption/taskbar icons (see winicon).
-                                #[cfg(windows)]
-                                apply_window_icons(&win);
-                                // Safety net: if the frontend fails to load / never
-                                // signals ready, show the window anyway after a short
-                                // delay so it can't stay invisible forever.
-                                let win_fallback = win.clone();
-                                tauri::async_runtime::spawn(async move {
-                                    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
-                                    if !win_fallback.is_visible().unwrap_or(true) {
-                                        let _ = win_fallback.show();
-                                        let _ = win_fallback.set_focus();
-                                    }
-                                });
-                                log(&format!("  new window '{}' created (hidden; shown when ready) | +{}ms", label, t0.elapsed().as_millis()));
-                            }
-                            Err(e) => {
-                                log(&format!("  WINDOW CREATE FAILED: {} | +{}ms", e, t0.elapsed().as_millis()));
-                            }
-                        }
-
-                        log(&format!("=== CAPTURE TOTAL: {}ms ===", t0.elapsed().as_millis()));
-                    }
-                    Err(e) => {
-                        log(&format!("  CROP FAILED: {} | +{}ms", e, t0.elapsed().as_millis()));
-                    }
-                }
+        let key_map = {
+            if let Some(state) = app.try_state::<plugins::PluginManagerState>() {
+                let mgr = state.0.lock();
+                mgr.get_key_map()
+            } else {
+                std::collections::HashMap::new()
             }
-            None => {
-                log(&format!("  selection cancelled | +{}ms", t0.elapsed().as_millis()));
-            }
-        }
+        };
 
+        log(&format!("  showing web overlay... | +{}ms", t0.elapsed().as_millis()));
+        let overlay_result = overlay_web::show_web_overlay(
+            &app,
+            &capture.buffer,
+            capture.width,
+            capture.height,
+            key_map,
+        );
+        let captured_copy_image = COPY_IMAGE_MODE.load(Ordering::SeqCst);
+        CAPTURE_IN_PROGRESS.store(false, Ordering::SeqCst);
+        log(&format!("  web overlay returned | +{}ms", t0.elapsed().as_millis()));
+
+        handle_overlay_result(&app, &capture, overlay_result, captured_copy_image, t0);
     });
 }
 
@@ -411,7 +501,7 @@ fn setup_editor_window(window: tauri::Window) {
 fn restore_results_window(window: tauri::Window) {
     let saved = commands::settings::load_settings_sync();
     let w = saved.results_width.max(620.0);
-    let h = saved.results_height.max(190.0);
+    let h = saved.results_height.max(RESULTS_MIN_HEIGHT);
     let _ = window.unmaximize();
     let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize { width: w, height: h }));
     let _ = window.center();
@@ -498,6 +588,8 @@ fn register_hotkey(app: &AppHandle, shortcut: Shortcut) -> Result<(), String> {
                 // Force overlay to repaint immediately so tint changes visually
                 #[cfg(windows)]
                 overlay::invalidate_overlay();
+                #[cfg(not(windows))]
+                let _ = app.emit_to("overlay", "overlay-mode-changed", !current);
                 log(&format!("  Hotkey double-press → toggled to {}", if !current { "copy image" } else { "copy link" }));
                 return;
             }
@@ -664,6 +756,26 @@ fn main() {
             register_hotkey(&app_handle, shortcut)?;
             log("setup: hotkey registered");
 
+            // Pre-warm the overlay's WebviewWindow (hidden) so its WKWebView
+            // is already up and its Svelte component already mounted by the
+            // time the user actually captures — spinning one up cold was
+            // measured at ~2.3s, the dominant cost in "overlay takes a
+            // couple seconds to appear" (see overlay_web.rs's doc comment).
+            // Off the main setup thread so it can't delay tray/hotkey
+            // readiness; window creation itself is safe from any thread (the
+            // results-window path already does this — see start_capture).
+            #[cfg(not(windows))]
+            {
+                let prewarm_app = app.handle().clone();
+                std::thread::spawn(move || {
+                    overlay_web::prewarm(&prewarm_app);
+                    // Same reasoning for the Results window — a cold
+                    // WKWebView is what made it appear a second or two
+                    // after the selection finished.
+                    results_spare::prewarm(&prewarm_app);
+                });
+            }
+
             // Housekeeping + plugin startup run in a BACKGROUND thread. Both can be
             // slow — cleanup scans %TEMP%, and each plugin's hello handshake can take
             // up to 20s — and NONE of it must delay the Tauri event loop from starting.
@@ -787,6 +899,18 @@ fn main() {
             commands::plugins::check_runtime,
             commands::plugins::read_script,
             commands::plugins::precompile_script,
+            #[cfg(not(windows))]
+            overlay_web::overlay_get_meta,
+            #[cfg(not(windows))]
+            overlay_web::overlay_get_pixels,
+            #[cfg(not(windows))]
+            overlay_web::overlay_finish,
+            #[cfg(not(windows))]
+            overlay_web::overlay_plugin_call,
+            #[cfg(not(windows))]
+            overlay_web::overlay_cancel,
+            #[cfg(not(windows))]
+            overlay_web::overlay_ready,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
