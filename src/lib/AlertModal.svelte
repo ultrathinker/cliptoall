@@ -1,17 +1,32 @@
 <script lang="ts">
-  import { openUrl } from '@tauri-apps/plugin-opener';
+  import { openSystemSettings } from './api';
   import { alertState, dismissAlert } from './stores/alert.svelte';
+
+  // Escape closes, from anywhere. The handler on the backdrop below only fires
+  // when the backdrop itself has focus, and the popup stops key events from
+  // propagating to it — so with a single action button and no OK, that alone
+  // would leave no keyboard way out.
+  $effect(() => {
+    if (!alertState.message) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); dismissAlert(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   async function handleAction() {
     const url = alertState.action?.url;
-    // Clear the modal first so the URL click feels immediate even if
-    // `openUrl` rejects (e.g. sandbox blocked an unauthorized scheme).
+    // Routed through Rust (NSWorkspace), not tauri-plugin-opener: the main
+    // window's opener capability allows only http/https, and the plugin opens
+    // URLs by spawning `open`, which the sandbox forbids. See
+    // `open_system_settings` in main.rs.
     dismissAlert();
     if (!url) return;
     try {
-      await openUrl(url);
+      await openSystemSettings(url);
     } catch (e) {
-      console.error('Failed to open URL from alert:', e);
+      console.error('Failed to open System Settings from alert:', e);
     }
   }
 </script>
@@ -26,11 +41,16 @@
   >
     <div class="alert-popup" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} role="dialog" tabindex="-1">
       <pre class="alert-popup-body">{alertState.message}</pre>
+      <!-- One button. When the alert carries an action there is exactly one
+           sensible thing to do, and an extra OK next to it only asks the user
+           to decide which button is the real one. Dismissing without acting is
+           still possible: click outside, or press Escape. -->
       <div class="alert-popup-actions">
         {#if alertState.action}
-          <button class="btn-default alert-popup-secondary" onclick={handleAction}>{alertState.action.label}</button>
+          <button class="btn-accent alert-popup-ok" onclick={handleAction}>{alertState.action.label}</button>
+        {:else}
+          <button class="btn-accent alert-popup-ok" onclick={dismissAlert}>OK</button>
         {/if}
-        <button class="btn-accent alert-popup-ok" onclick={dismissAlert}>OK</button>
       </div>
     </div>
   </div>
@@ -75,12 +95,6 @@
     display: flex;
     justify-content: flex-end;
     gap: 8px;
-  }
-
-  .alert-popup-secondary {
-    /* Visual cue that the secondary button is the more interesting action;
-       keeps the OK button as the default primary position on the right. */
-    color: var(--accent, #3b82f6);
   }
 
   .alert-popup-ok {

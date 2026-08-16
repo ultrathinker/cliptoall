@@ -576,6 +576,68 @@ struct PendingImageResult {
     output_scale: f32,
 }
 
+/// Open a System Settings privacy pane.
+///
+/// Deliberately NOT routed through tauri-plugin-opener from the frontend, for
+/// two independent reasons:
+///
+///  * the `opener:allow-open-url` capability granted to the main window allows
+///    only `https://**` and `http://**`, so an `x-apple.systempreferences:`
+///    link is rejected before it reaches the OS — the button appeared to do
+///    nothing at all;
+///  * the plugin opens URLs by spawning `/usr/bin/open`, and the App Sandbox
+///    forbids spawning external processes. Widening the capability would have
+///    moved the failure rather than fixed it.
+///
+/// `NSWorkspace.openURL:` is the sandbox-safe route: the open is performed by
+/// LaunchServices on our behalf, no process is spawned, and no entitlement is
+/// required.
+///
+/// The scheme is checked here rather than trusted from the frontend — this
+/// command must not become a general-purpose "open any URL" bypass of the
+/// capability system it exists to work around.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn open_system_settings(url: String) -> Result<(), String> {
+    use objc2::runtime::AnyObject;
+    use objc2_foundation::{NSString, NSURL};
+
+    if !url.starts_with("x-apple.systempreferences:") {
+        return Err(format!("refusing to open a non-System-Settings URL: {}", url));
+    }
+
+    let ns_url = NSURL::URLWithString(&NSString::from_str(&url))
+        .ok_or_else(|| format!("NSURL could not parse '{}'", url))?;
+
+    // SAFETY: +sharedWorkspace is a documented class method returning a
+    // long-lived singleton, and -openURL: takes an NSURL and returns BOOL.
+    // Both are checked for existence first: an unrecognised selector is an
+    // Objective-C exception, which cannot be caught here and would abort the
+    // process (this is exactly how the SMAppService selector mistake crashed
+    // the app on launch).
+    let cls = objc2::class!(NSWorkspace);
+    let responds: bool =
+        unsafe { objc2::msg_send![cls, respondsToSelector: objc2::sel!(sharedWorkspace)] };
+    if !responds {
+        return Err("NSWorkspace does not respond to sharedWorkspace".to_string());
+    }
+    let workspace: *mut AnyObject = unsafe { objc2::msg_send![cls, sharedWorkspace] };
+    if workspace.is_null() {
+        return Err("NSWorkspace.sharedWorkspace returned null".to_string());
+    }
+    let responds: bool =
+        unsafe { objc2::msg_send![workspace, respondsToSelector: objc2::sel!(openURL:)] };
+    if !responds {
+        return Err("NSWorkspace does not respond to openURL:".to_string());
+    }
+    let opened: bool = unsafe { objc2::msg_send![workspace, openURL: &*ns_url] };
+    if opened {
+        Ok(())
+    } else {
+        Err(format!("LaunchServices refused to open '{}'", url))
+    }
+}
+
 #[tauri::command]
 fn get_pending_image(window: tauri::Window, state: tauri::State<'_, PendingResults>) -> Option<PendingImageResult> {
     // Non-destructive read: the entry is removed when the window is destroyed
@@ -1081,6 +1143,8 @@ fn main() {
             commands::clipboard::copy_image_to_clipboard,
             commands::settings::save_results_window_size,
             get_pending_image,
+            #[cfg(target_os = "macos")]
+            open_system_settings,
             setup_editor_window,
             restore_results_window,
             update_hotkey,

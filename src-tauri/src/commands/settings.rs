@@ -359,9 +359,11 @@ fn save_settings_to_disk_locked(settings: AppSettings) -> Result<(), String> {
     crate::LOGGING_ON.store(settings.logging_on, Ordering::Relaxed);
     crate::DEFAULT_MODE_IS_IMAGE.store(settings.default_mode == "image", Ordering::Relaxed);
 
-    // Update Windows autorun registry entry
+    // Apply the autostart setting: registry entry on Windows, SMAppService on
+    // macOS. Failure is logged, not propagated — a settings save should not fail
+    // because the OS refused a login item.
     if let Err(e) = crate::utils::autorun::set_autorun(settings.autorun) {
-        crate::log(&format!("Autorun registry update failed: {}", e));
+        crate::log(&format!("Autorun update failed: {}", e));
     }
 
     // Encrypt sensitive fields before writing to disk (keep `settings` plaintext

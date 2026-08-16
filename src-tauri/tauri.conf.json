@@ -14,7 +14,12 @@
     "icon": [
       "icons/ClipToAll-all.ico",
       "icons/ClipToAll-32x32.png"
-    ]
+    ],
+    "category": "public.app-category.productivity",
+    "macOS": {
+      "minimumSystemVersion": "14.0",
+      "entitlements": "Entitlements.plist"
+    }
   },
   "app": {
     "windows": [

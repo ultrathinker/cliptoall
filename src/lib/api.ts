@@ -86,3 +86,9 @@ export const deleteScript = (path: string) => invoke<void>('delete_script', { pa
 export const checkRuntime = (language: string) => invoke<string>('check_runtime', { language });
 export const readScript = (path: string) => invoke<string>('read_script', { path });
 export const precompileScript = (path: string) => invoke<string>('precompile_script', { path });
+
+// macOS: open a System Settings privacy pane. Goes through Rust (NSWorkspace)
+// rather than tauri-plugin-opener — the main window's opener capability allows
+// only http/https, and the plugin spawns `open`, which the sandbox forbids.
+export const openSystemSettings = (url: string) =>
+  invoke<void>('open_system_settings', { url });

@@ -77,7 +77,7 @@ objc2-screen-capture-kit = { version = "0.3", default-features = true, features 
 # is NOT the same as being usable" — anything we name in code must be declared
 # explicitly under the same target gate.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSArray", "NSError"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSError", "NSString", "NSURL"] }
 objc2-core-graphics = { version = "0.3", features = ["CGImage", "CGColorSpace", "CGContext", "CGDataProvider", "CGDirectDisplay", "CGWindow"] }
 objc2-core-foundation = { version = "0.3", features = ["CFCGTypes"] }
 block2 = "0.6"

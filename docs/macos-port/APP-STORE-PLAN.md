@@ -19,7 +19,7 @@ what was done most recently.
 | 1 — remove `macos-private-api` | not started — **this is the next gate** |
 | 2 — de-Windows the visible surface | **done**, in the working tree |
 | 3 — fix unfinished signals | **done**, in the working tree, GUI check pending |
-| 4 — store build configuration | not started |
+| 4 — store build configuration | **done**, in the working tree — needs a real bundle build to confirm autostart |
 | 5 — OCR, multi-monitor | not started |
 | 6 — submission materials | not started |
 
@@ -267,6 +267,31 @@ probably pass technically but leaves the 4.3 argument thin.
 Confirmed interactively — with the app running, Cut stopped working everywhere.
 The default is now `Ctrl+Cmd+X`, with a migration for settings files that
 already hold `Cmd+X`. Catalogued as bug #26 in `HANDOFF.md`.
+
+---
+
+## 9a. Sandbox audit result (Phase 4b)
+
+Every filesystem write goes through `dirs::config_dir()` or
+`std::env::temp_dir()`, both of which the sandbox redirects into the app
+container — nothing writes to an absolute path outside it. Every
+`Command::new` on macOS is either `#[cfg(windows)]`-gated (the plugin hosts) or
+unreachable in a shipped build (`screencapture` in `sck_selftest`, behind an
+env var that exits the process). Keychain access via `keyring` with the
+`apple-native` backend needs no entitlement for items the app itself wrote.
+
+One live gap, and the reasoning matters more than the gap:
+
+**`tauri-plugin-single-instance` does not work under the sandbox.** Its macOS
+implementation hardcodes `/tmp/<identifier>_si.sock` (verified in
+`tauri-plugin-single-instance-2.4.0/src/platform_impl/macos.rs:60-71`), and the
+sandbox redirects `$TMPDIR`, **not** the literal `/tmp` path. So the bind is
+denied. It degrades gracefully rather than crashing: a permission error matches
+neither `NotFound` nor `ConnectionRefused`, so it falls to the catch-all arm,
+logs, and launches normally. The practical impact on macOS is close to nil —
+LaunchServices already refuses to start a second instance of the same bundle —
+so this is left as-is deliberately. Do not "fix" it by assuming `/tmp` is
+container-local; it is not.
 
 ---
 
