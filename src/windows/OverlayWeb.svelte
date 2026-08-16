@@ -110,11 +110,63 @@
     };
   }
 
+  /// Give the compositor a chance to commit, but NEVER hang.
+  ///
+  /// Only meaningful while the window is visible: macOS suspends rendering for
+  /// hidden windows, so requestAnimationFrame stops firing and a bare await on
+  /// it would deadlock (that is bug #17, and it is why we cannot simply wait
+  /// for a paint before showing the overlay). Every caller below runs while the
+  /// overlay is still on screen, so the frame really does arrive — the timeout
+  /// is a safety net, not the expected path.
+  function waitForPaint(timeoutMs = 50): Promise<void> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => { if (!settled) { settled = true; resolve(); } };
+      requestAnimationFrame(() => requestAnimationFrame(finish));
+      setTimeout(finish, timeoutMs);
+    });
+  }
+
+  /// Erase the frame and wait for that erasure to actually reach the screen.
+  ///
+  /// This is the fix for the previous capture's selection rectangle flashing on
+  /// the next one. The overlay window is reused rather than rebuilt, and
+  /// WKWebView keeps the last COMPOSITED texture for a hidden window. Drawing
+  /// the new screenshot before calling `overlay_ready` is not enough on its own:
+  /// the draw lands in the canvas backing store immediately, but the layer is
+  /// only recomposited on the next frame — which cannot happen while the window
+  /// is hidden. So `show()` reveals whatever was last composited, i.e. the old
+  /// frame with its selection rectangle, until a frame or two later.
+  ///
+  /// Waiting for a paint before showing is impossible (see waitForPaint). So
+  /// instead we make sure there is nothing harmful left to show: wipe the canvas
+  /// while the window is STILL VISIBLE and let the compositor commit that blank
+  /// frame. Whatever WKWebView retains from then on is empty.
+  ///
+  /// Setting `width` (rather than clearRect) resets the entire backing store and
+  /// is the cheaper idiom.
+  async function wipeFrame() {
+    ready = false;
+    if (canvasEl) {
+      canvasEl.width = canvasEl.width; // eslint-disable-line no-self-assign
+    }
+    // Drop the cached copies too — three full-screen canvases per capture is
+    // ~48MB at 2560x1600, and nothing should be able to redraw the old shot.
+    originalCanvas = undefined as unknown as HTMLCanvasElement;
+    dimmedLinkCanvas = undefined as unknown as HTMLCanvasElement;
+    dimmedImageCanvas = undefined as unknown as HTMLCanvasElement;
+    await waitForPaint();
+  }
+
   async function finish() {
     if (finished) return;
     finished = true;
     const { x, y, w, h } = effectiveSelection();
-    if (w >= 5 && h >= 5) {
+    const valid = w >= 5 && h >= 5;
+    // Wipe BEFORE handing the result back: this call is what makes Rust hide
+    // the window, and the wipe must be composited while it is still visible.
+    await wipeFrame();
+    if (valid) {
       await invoke('overlay_finish', { x, y, width: w, height: h });
     } else {
       await invoke('overlay_cancel');
@@ -124,6 +176,7 @@
   async function cancel() {
     if (finished) return;
     finished = true;
+    await wipeFrame();
     await invoke('overlay_cancel');
   }
 
@@ -139,6 +192,16 @@
     shiftDown = false;
     finished = false;
     ready = false;
+
+    // Second line of defence. The exit paths already wiped the frame while the
+    // window was visible (see wipeFrame), so there should be nothing left — but
+    // if the app was killed mid-capture, or a future change adds an exit path
+    // that forgets, this guarantees the canvas holds no stale screenshot before
+    // we start the (async) fetch of the new one. No paint wait here: the window
+    // is hidden at this point, so no frame would come anyway.
+    if (canvasEl) {
+      canvasEl.width = canvasEl.width; // eslint-disable-line no-self-assign
+    }
 
     try {
       const meta = await invoke<{
@@ -236,7 +299,11 @@
       const entry = keyMap[e.key.toUpperCase()];
       if (entry) {
         finished = true;
-        invoke('overlay_plugin_call', { path: entry[0], functionId: entry[1] });
+        // Same wipe-then-report ordering as finish()/cancel(): this is also an
+        // exit path, so the frame the compositor keeps must be blank.
+        wipeFrame().then(() =>
+          invoke('overlay_plugin_call', { path: entry[0], functionId: entry[1] }),
+        );
       }
     }
   }

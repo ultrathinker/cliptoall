@@ -13,8 +13,9 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 pub struct CaptureData {
     /// Raw 4-bytes-per-pixel data in whichever order this platform's capture
     /// backend natively produces: BGRA on Windows (GDI), RGBA on macOS
-    /// (CoreGraphics via xcap). Deliberately NOT normalized to one order at
-    /// capture time — see `crop_and_save_from_buffer`'s comment for why.
+    /// (ScreenCaptureKit via `sck_capture`, after drawing through an RGBA
+    /// bitmap context — see HANDOFF §4.1 / bug #14 on why we deliberately
+    /// keep the overlay's RGBA contract and avoid a second channel swap).
     pub buffer: Vec<u8>,
     pub width: i32,
     pub height: i32,
@@ -302,47 +303,44 @@ pub fn cleanup_temp_files() {
     }
 }
 
-/// Capture the primary monitor to memory via `xcap` (CoreGraphics under the
-/// hood). Windows' `capture_to_memory` grabs the whole virtual screen (every
+/// Capture the primary monitor to memory via ScreenCaptureKit on macOS.
+/// Windows' `capture_to_memory` grabs the whole virtual screen (every
 /// monitor in one buffer, via `SM_CXVIRTUALSCREEN`); this captures only the
 /// PRIMARY monitor for now — proper multi-monitor compositing is a follow-up
 /// (PLAN.md Phase 2.1 flags evaluating multi-monitor before committing to an
 /// approach), so a selection dragged onto a second display will misbehave
 /// until then.
-#[cfg(not(windows))]
+///
+/// Replaces the previous `xcap`-backed implementation (`CGWindowListCreateImage`
+/// under the hood, deprecated since macOS 14). The "~270 ms" baseline was
+/// inherited from round-1 reporting; see the §0 caveat in HANDOFF.md §4
+/// for why that number is no longer trustworthy. Round-2 measured
+/// `capture_to_memory` lands at 79–100 ms end-to-end on this machine at
+/// the full 2560×1600 backing-store resolution (see `mx-sck-report.md` for
+/// the breakdown — the round-1 "~30–40 ms" claim quoted in earlier versions
+/// of this comment was measured at a quarter of the display's real
+/// resolution, bug #21, and does not reflect current code). The actual
+/// capture logic lives in `sck_capture` to keep `capture_to_memory`
+/// readable.
+#[cfg(target_os = "macos")]
 pub fn capture_to_memory() -> Result<CaptureData, String> {
     use std::time::Instant;
     let t0 = Instant::now();
+    crate::log(&format!("    [capture] capture_to_memory begin | +{}ms", t0.elapsed().as_millis()));
+    let result = crate::sck_capture::capture_via_sck(t0);
+    match &result {
+        Ok(_) => crate::log(&format!("    [capture] capture_to_memory done | +{}ms", t0.elapsed().as_millis())),
+        Err(e) => crate::log(&format!("    [capture] capture_to_memory FAILED: {} | +{}ms", e, t0.elapsed().as_millis())),
+    }
+    result
+}
 
-    let monitors = xcap::Monitor::all().map_err(|e| format!("Monitor::all failed: {}", e))?;
-    let monitor = monitors.iter().find(|m| m.is_primary().unwrap_or(false))
-        .or_else(|| monitors.first())
-        .ok_or_else(|| "No monitor found".to_string())?;
-
-    // xcap reports x/y/width/height in LOGICAL points (NSScreen convention);
-    // capture_image() returns PHYSICAL pixels. CaptureData.left/top must be
-    // in the SAME physical-pixel space as the buffer (crop math and
-    // get_monitor_scale below both assume that), so scale them up front.
-    let scale = monitor.scale_factor().unwrap_or(1.0).max(1.0);
-    let left = (monitor.x().map_err(|e| format!("Monitor::x failed: {}", e))? as f32 * scale).round() as i32;
-    let top = (monitor.y().map_err(|e| format!("Monitor::y failed: {}", e))? as f32 * scale).round() as i32;
-
-    let img = monitor.capture_image().map_err(|e| format!("capture_image failed: {}", e))?;
-    let width = img.width() as i32;
-    let height = img.height() as i32;
-    crate::log(&format!("    [capture] xcap monitor={}x{} at ({},{}) | +{}ms", width, height, left, top, t0.elapsed().as_millis()));
-
-    // Keep xcap's native RGBA order as-is — no channel-swap pass over the
-    // whole screen here. `crop_and_save_from_buffer` reads this buffer with
-    // platform-aware channel indices instead of everyone normalizing to one
-    // order at capture time (see its comment): that swap used to cost
-    // ~180ms on a 16M-pixel image, TWICE (once here, once again undoing it
-    // in overlay_web.rs for the browser canvas, which wants RGBA anyway).
-    // into_raw() also avoids a copy entirely — `img` is otherwise unused.
-    let buffer = img.into_raw();
-
-    crate::log(&format!("    [capture] capture_to_memory done | +{}ms", t0.elapsed().as_millis()));
-    Ok(CaptureData { buffer, width, height, left, top })
+/// Linux: ScreenCaptureKit is not available, and the project has never
+/// supported Linux (see EXECUTION-PLAN §2). Build must still parse; runtime
+/// path returns an error so it can't accidentally succeed.
+#[cfg(target_os = "linux")]
+pub fn capture_to_memory() -> Result<CaptureData, String> {
+    Err("Screen capture is not implemented on Linux".to_string())
 }
 
 /// Capture the screen to memory (no file I/O). Used by native overlay.
@@ -455,12 +453,14 @@ pub fn crop_and_save_from_buffer(
 
     // Extract crop region and drop the alpha channel. `data.buffer`'s pixel
     // order is whatever this platform's capture backend natively produces —
-    // BGRA on Windows (GDI), RGBA on macOS (CoreGraphics via xcap) — rather
-    // than normalizing to one order at capture time and paying for a
-    // channel-swap pass over the whole screen on every single capture, only
-    // to (on macOS) undo that exact swap again for the web overlay's canvas,
-    // which wants RGBA anyway. This is the one place that needs to know
-    // which order it's reading.
+    // BGRA on Windows (GDI), RGBA on macOS (ScreenCaptureKit via
+    // `sck_capture`, drawn through an RGBA bitmap context so we never have
+    // to ship BGRA to the overlay). We deliberately avoid normalizing to
+    // one order at capture time and paying for a channel-swap pass over
+    // the whole screen on every single capture, only to (on macOS) undo
+    // that exact swap again for the web overlay's canvas, which wants RGBA
+    // anyway. See HANDOFF §4.1 / bug #14. This is the one place that needs
+    // to know which order it's reading.
     #[cfg(windows)]
     let (ri, gi, bi) = (2usize, 1usize, 0usize); // BGRA
     #[cfg(not(windows))]
@@ -524,14 +524,9 @@ fn get_monitor_scale(x: i32, y: i32) -> f32 {
 /// the very edge could match no monitor and silently fall back to 1.0. Once
 /// multi-monitor capture exists, resolve scale properly per-monitor instead
 /// of reintroducing that hit-test.)
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 fn get_monitor_scale(_x: i32, _y: i32) -> f32 {
-    let Ok(monitors) = xcap::Monitor::all() else { return 1.0 };
-    monitors.iter().find(|m| m.is_primary().unwrap_or(false))
-        .or_else(|| monitors.first())
-        .and_then(|m| m.scale_factor().ok())
-        .map(|s| s.max(1.0))
-        .unwrap_or(1.0)
+    crate::sck_capture::primary_monitor_scale()
 }
 
 /// Save the editor canvas (PNG base64) as a LOSSLESS PNG working copy. Keeping

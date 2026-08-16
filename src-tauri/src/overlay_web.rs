@@ -34,6 +34,27 @@ struct PendingOverlay {
 static PENDING: Mutex<Option<PendingOverlay>> = Mutex::new(None);
 static RESULT_TX: Mutex<Option<mpsc::Sender<Option<OverlayResult>>>> = Mutex::new(None);
 
+/// When the hotkey fired, so every later stage can report its offset from the
+/// user's keypress rather than from its own local start. The number that
+/// actually matters to a user is "keypress → dimmed screen on screen", and
+/// that spans two processes' worth of work (Rust capture, then JS repaint),
+/// so no single local `Instant` can measure it.
+static HOTKEY_T0: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// Called from `start_capture` the moment the hotkey handler runs.
+pub fn mark_capture_start() {
+    *HOTKEY_T0.lock().unwrap() = Some(std::time::Instant::now());
+}
+
+/// Milliseconds since the hotkey, or `-1` if the clock was never started.
+fn since_hotkey_ms() -> i64 {
+    HOTKEY_T0
+        .lock()
+        .unwrap()
+        .map(|t| t.elapsed().as_millis() as i64)
+        .unwrap_or(-1)
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayMetaDto {
@@ -78,6 +99,11 @@ pub fn overlay_get_pixels(window: tauri::Window) -> Result<tauri::ipc::Response,
     require_overlay_window(&window)?;
     let pending = PENDING.lock().unwrap();
     let p = pending.as_ref().ok_or_else(|| "No pending overlay screenshot".to_string())?;
+    crate::log(&format!(
+        "  overlay_web: JS pulled {} bytes of pixels | HOTKEY+{}ms",
+        p.rgba.len(),
+        since_hotkey_ms()
+    ));
     Ok(tauri::ipc::Response::new(p.rgba.clone()))
 }
 
@@ -107,6 +133,10 @@ pub fn overlay_ready(window: tauri::Window) -> Result<(), String> {
     require_overlay_window(&window)?;
     let _ = window.show();
     let _ = window.set_focus();
+    crate::log(&format!(
+        "  overlay_web: OVERLAY VISIBLE (via JS ready) | HOTKEY+{}ms",
+        since_hotkey_ms()
+    ));
     Ok(())
 }
 
@@ -121,26 +151,33 @@ fn send_result(result: Option<OverlayResult>) -> Result<(), String> {
     }
 }
 
-/// Primary monitor's LOGICAL bounds (xcap reports x/y/width/height in
-/// points, not the physical pixels `CaptureData` uses) — window position/
-/// size (`WebviewWindowBuilder`/`Window::set_position`/`set_size`) are
-/// logical too.
+/// Bounds of the display we capture, in LOGICAL POINTS — not the physical
+/// pixels `CaptureData` uses. Tauri window position/size
+/// (`WebviewWindowBuilder`/`Window::set_position`/`set_size` with
+/// `LogicalPosition`/`LogicalSize`) are in points, so points is what this
+/// must return; converting to pixels here would make the overlay twice the
+/// size of the screen on a Retina display.
+///
+/// Delegates to `sck_capture::capture_display_logical_bounds`, which resolves
+/// `CGMainDisplayID()` — deliberately the SAME display the capture path
+/// picks. Round 1 read `SCShareableContent.displays().firstObject()` here
+/// while the capture path resolved its own display separately; on a
+/// multi-monitor setup those can be different screens, which would put the
+/// overlay on the wrong one. One helper, one definition of "the display we
+/// capture" (HANDOFF §4).
+///
+/// Falls back to the supplied defaults only if the display mode cannot be
+/// read at all.
 fn primary_monitor_logical_bounds(fallback_w: i32, fallback_h: i32) -> (f64, f64, f64, f64) {
-    match xcap::Monitor::all() {
-        Ok(monitors) => {
-            let m = monitors.iter().find(|m| m.is_primary().unwrap_or(false)).or_else(|| monitors.first());
-            match m {
-                Some(m) => (
-                    m.x().unwrap_or(0) as f64,
-                    m.y().unwrap_or(0) as f64,
-                    m.width().unwrap_or(fallback_w as u32) as f64,
-                    m.height().unwrap_or(fallback_h as u32) as f64,
-                ),
-                None => (0.0, 0.0, fallback_w as f64, fallback_h as f64),
-            }
-        }
-        Err(_) => (0.0, 0.0, fallback_w as f64, fallback_h as f64),
+    // `sck_capture` is `#[cfg(target_os = "macos")]`; this module is
+    // `#[cfg(not(windows))]`, so it also parses on Linux, where there is no
+    // capture backend to ask (EXECUTION-PLAN §2 — Linux is out of scope but
+    // must not break the build).
+    #[cfg(target_os = "macos")]
+    if let Some(bounds) = crate::sck_capture::capture_display_logical_bounds() {
+        return bounds;
     }
+    (0.0, 0.0, fallback_w as f64, fallback_h as f64)
 }
 
 /// Create the overlay window HIDDEN so its WKWebView is warm (JS bundle
@@ -186,13 +223,14 @@ pub fn show_web_overlay(
     use tauri::Manager;
     let t0 = std::time::Instant::now();
 
-    // `capture_to_memory` (macOS) keeps xcap's native RGBA order rather than
-    // normalizing to BGRA — this used to convert BGRA back to RGBA here,
-    // undoing that exact conversion (see capture.rs's CaptureData comment).
-    // Still one copy: `capture` in main.rs's start_capture is used again
-    // afterward (crop_and_save_from_buffer), so this can't take ownership
-    // of it — but a plain memcpy of a few MB is unmeasurable next to what
-    // the removed per-pixel channel swap cost.
+    // `capture_to_memory` (macOS) produces RGBA — ScreenCaptureKit hands
+    // back a CGImage in BGRA premultiplied, but `sck_capture` draws it
+    // through an RGBA bitmap context (see HANDOFF §4.1 / bug #14 on why
+    // we never produce BGRA), so the bytes here are already RGBA and no
+    // conversion is needed. This is one copy: `capture` in main.rs's
+    // start_capture is used again afterward (crop_and_save_from_buffer),
+    // so this can't take ownership of it — but a plain memcpy of a few MB
+    // is unmeasurable next to what the removed per-pixel channel swap cost.
     let rgba = pixels_rgba.to_vec();
     crate::log(&format!("  overlay_web: pixel buffer copied | +{}ms", t0.elapsed().as_millis()));
 
@@ -219,7 +257,12 @@ pub fn show_web_overlay(
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(400));
                 if !fallback.is_visible().unwrap_or(true) {
-                    crate::log("  overlay_web: ready signal never arrived, showing anyway");
+                    crate::log(&format!(
+                        "  overlay_web: *** FALLBACK FIRED *** JS never signalled ready within 400ms — \
+                         showing the window with WHATEVER is on its canvas, i.e. the PREVIOUS \
+                         capture's frame (bug #16 symptom) | HOTKEY+{}ms",
+                        since_hotkey_ms()
+                    ));
                     let _ = fallback.show();
                     let _ = fallback.set_focus();
                 }

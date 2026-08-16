@@ -36,6 +36,13 @@
   let hasUrl = $derived(!!session.url);
   // The link is directly usable only when it matches the current image.
   let linkUsable = $derived(session.status === 'done' && !session.stale);
+  // Stricter than `linkUsable`: for actions that FETCH the url, the link being
+  // valid is not enough — the bytes behind it must have landed. Between claiming
+  // a GDrive pool placeholder and its background PATCH, the url resolves to a
+  // blank ~600-byte placeholder, so opening it then shows a 1x1 image rather
+  // than the screenshot. Copying the link stays on `linkUsable`: handing someone
+  // a link they will open seconds later is precisely what the pool exists for.
+  let linkFetchable = $derived(linkUsable && !session.contentPending);
   let uploadError = $derived(session.status === 'error' ? session.error : '');
 
   const ERROR_MAX = 150;
@@ -269,13 +276,27 @@
     <div class="top-area">
       <!-- Left: URL + preview + status + search -->
       <div class="left-col">
-        <input
-          type="text"
-          value={session.url}
-          readonly
-          placeholder={uploading ? '' : session.status === 'skipped' ? 'Press Upload to get a link' : 'URL will appear here...'}
-          class="url-input"
-        />
+        {#if !session.url && session.status !== 'uploading'}
+          <!-- Actionable: no link yet and not in flight. Clicking runs the same
+               primary action as the button on the right (upload / retry / update).
+               The field is a real <button> so keyboard activation works for free
+               and screen readers announce it as interactive. -->
+          <button
+            type="button"
+            class="url-input actionable"
+            onclick={primaryAction}
+          >Click here or press Upload</button>
+        {:else}
+          <!-- Read-only view: a link is present (or an upload is in flight, so we
+               freeze the field). User can select text to copy. Click does nothing. -->
+          <input
+            type="text"
+            value={session.url}
+            readonly
+            placeholder={uploading ? '' : 'URL will appear here...'}
+            class="url-input"
+          />
+        {/if}
         <div class="preview-row">
           <div class="preview-box">
             {#if previewDataUrl}
@@ -310,9 +331,9 @@
               {/if}
             </div>
             <div class="search-buttons">
-              <button class="btn-default" disabled={!linkUsable} onclick={searchGoogle}>Google</button>
-              <button class="btn-default" disabled={!linkUsable} onclick={searchTineye}>Tineye</button>
-              <button class="btn-default" disabled={!linkUsable} onclick={searchEverywhere}>Search both</button>
+              <button class="btn-default" disabled={!linkFetchable} onclick={searchGoogle}>Google</button>
+              <button class="btn-default" disabled={!linkFetchable} onclick={searchTineye}>Tineye</button>
+              <button class="btn-default" disabled={!linkFetchable} onclick={searchEverywhere}>Search both</button>
             </div>
             <label class="autoclose-label">
               <input type="checkbox" checked={autoCloseEnabled} onchange={toggleAutoclose} />
@@ -327,7 +348,14 @@
       <div class="right-col">
         <button class="btn-accent btn-action" disabled={primaryDisabled} onclick={primaryAction}>{primaryLabel}</button>
         <button class="btn-accent btn-action" onclick={copyImage}>{copyImageLabel}</button>
-        <button class="btn-default btn-action" disabled={!linkUsable} onclick={openInBrowser}>Show</button>
+        <button
+          class="btn-default btn-action"
+          disabled={!linkFetchable}
+          title={session.contentPending ? 'Waiting for the image to finish landing on the server' : ''}
+          onclick={openInBrowser}
+        >
+          {#if session.contentPending && linkUsable}<span class="spinner" aria-hidden="true"></span>{/if}Show
+        </button>
         <button class="btn-default btn-action" onclick={handleEdit}>Edit</button>
       </div>
     </div>
@@ -399,6 +427,40 @@
     font-size: 10.5pt;
     height: 30px;
     box-sizing: border-box;
+    text-align: left;
+    /* Override button defaults so the button version looks identical to the
+       input version. appearance:none strips the macOS / Windows native button
+       chrome so the border/padding we set above is the only chrome. */
+    appearance: none;
+    -webkit-appearance: none;
+  }
+
+  /* Shown inside "Show" while the GDrive pool's background PATCH is still
+     writing the real bytes behind an already-shared link. */
+  .spinner {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 6px;
+    vertical-align: -1px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    opacity: 0.7;
+    animation: spin 0.7s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .url-input.actionable {
+    /* Hint that the field is clickable. The default I-beam on the input
+       version is the right cursor for selecting text; the button version
+       needs a pointer to advertise its primary action. */
+    cursor: pointer;
+    /* Prevent the placeholder text from being accidentally selected on click. */
+    user-select: none;
   }
 
   .url-input:focus {

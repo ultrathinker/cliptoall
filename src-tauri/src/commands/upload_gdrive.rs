@@ -682,7 +682,22 @@ pub async fn gdrive_upload_pooled(
                     }
                 }
             }
-            if !patched {
+            if patched {
+                // The link has been usable since the moment it was claimed, but
+                // until now it served the blank placeholder. Tell the window the
+                // bytes are actually there, so actions that FETCH the url —
+                // "Show", and the reverse-image searches, which hand the link to
+                // a third party that downloads it once and caches the result —
+                // can stop waiting. Copying the link was never gated: handing
+                // someone a link they'll open seconds later is exactly what the
+                // pool is for.
+                use tauri::Emitter;
+                let _ = window_clone.emit_to(
+                    win_label.as_str(),
+                    "gdrive-content-ready",
+                    serde_json::json!({ "callId": call_id }),
+                );
+            } else {
                 match gdrive_upload_cached(&pool_fallback, image_path_clone, folder_clone).await {
                     Ok(new_url) => {
                         crate::log(&format!("[gdrive_pool] placeholder unfillable, fell back to direct upload: {}", new_url));

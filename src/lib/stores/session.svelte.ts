@@ -30,6 +30,16 @@ export const session = $state({
   clipboardWarning: false,
   /** id of the latest upload; a late GDrive pool fallback with an older id is ignored */
   callId: 0,
+  /**
+   * True between claiming a GDrive pool placeholder and the background PATCH
+   * that writes the real bytes. The link is already public and shareable — that
+   * is the point of the pool — but for this window it still resolves to the
+   * ~600-byte blank placeholder, so anything that FETCHES the url right now
+   * gets a 1x1 image instead of the screenshot.
+   *
+   * Always false for S3 (no pool) and for a direct GDrive upload.
+   */
+  contentPending: false,
   /** capture-monitor DPI scale; the image is full-res, this is applied only at
    *  output (upload/clipboard) when "resize shared images" is on */
   outputScale: 1,
@@ -51,6 +61,7 @@ export function initSession(originalPath: string, copyImageMode: boolean, output
   session.error = '';
   session.stale = false;
   session.clipboardWarning = false;
+  session.contentPending = false;
   session.outputScale = outputScale > 0 ? outputScale : 1;
 }
 
@@ -80,6 +91,28 @@ async function copyToClipboardSafe(text: string): Promise<boolean> {
  */
 let callSeq = 0;
 
+/**
+ * How long to wait for "gdrive-content-ready" before assuming the signal is
+ * never coming and re-enabling the fetch-dependent buttons anyway. The PATCH
+ * itself is sub-second; the retry ladder in `gdrive_upload_pooled` is at most
+ * 2s + 4s + 6s plus three request timeouts, and an unfillable placeholder ends
+ * in a fallback upload that emits "gdrive-url-updated" instead. This is the
+ * backstop for the case where NEITHER event arrives.
+ */
+const CONTENT_READY_TIMEOUT_MS = 30_000;
+
+/**
+ * The GDrive pool's background PATCH finished: the shared link now serves the
+ * real screenshot rather than the blank placeholder.
+ */
+export function markContentReady(callId: number) {
+  // Ignore a late signal for an upload the session has already moved past —
+  // same guard as updateUrl. Without it, a stale "ready" could un-gate the
+  // buttons for a NEWER upload that is still pending.
+  if (callId !== session.callId) return;
+  session.contentPending = false;
+}
+
 export async function startUpload(opts: { copyLink?: boolean } = {}): Promise<void> {
   if (session.status === 'uploading') return; // already in flight
   const s = get(settings);
@@ -91,6 +124,7 @@ export async function startUpload(opts: { copyLink?: boolean } = {}): Promise<vo
   session.callId = myCallId;
   session.status = 'uploading';
   session.error = '';
+  session.contentPending = false;
 
   try {
     let url: string;
@@ -102,6 +136,20 @@ export async function startUpload(opts: { copyLink?: boolean } = {}): Promise<vo
     } else {
       const result = await gdriveUploadPooled(path, myCallId, session.outputScale);
       url = result.url;
+      // `instant` means a pre-allocated placeholder was claimed: the url works
+      // right now but still serves the blank placeholder until the background
+      // PATCH lands. Backend then emits "gdrive-content-ready" (or
+      // "gdrive-url-updated" if it had to fall back to a direct upload).
+      if (result.instant) {
+        session.contentPending = true;
+        // Never leave the fetch-dependent buttons disabled forever: a dropped
+        // event, a killed backend task or a network stall must degrade to the
+        // old behaviour (button enabled, worst case one page refresh) rather
+        // than to a permanently dead "Show".
+        setTimeout(() => {
+          if (session.callId === myCallId) session.contentPending = false;
+        }, CONTENT_READY_TIMEOUT_MS);
+      }
     }
 
     session.url = url;
@@ -133,6 +181,9 @@ export async function updateUrl(callId: number, url: string): Promise<void> {
   if (callId !== session.callId) return;
   session.url = url;
   session.status = 'done';
+  // This link came from a direct upload, so its bytes are already in place —
+  // whatever the placeholder was doing no longer applies.
+  session.contentPending = false;
   // Do NOT clear `stale` here: this only swaps in a corrected link for the SAME
   // uploaded image. If the user edited since (so the image is stale), the
   // corrected link is still for the old image and must stay flagged stale.

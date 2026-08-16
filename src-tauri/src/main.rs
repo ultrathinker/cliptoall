@@ -12,6 +12,12 @@ mod overlay_web;
 mod plugins;
 #[cfg(not(windows))]
 mod results_spare;
+#[cfg(target_os = "macos")]
+mod sck_capture;
+#[cfg(target_os = "macos")]
+mod sck_notifications;
+#[cfg(target_os = "macos")]
+mod sck_selftest;
 mod utils;
 
 use std::collections::HashMap;
@@ -428,6 +434,7 @@ fn start_capture(app: AppHandle) {
     }
 
     let t0 = Instant::now();
+    overlay_web::mark_capture_start();
     log("=== CAPTURE START ===");
 
     std::thread::spawn(move || {
@@ -631,6 +638,43 @@ fn main() {
         }
     }));
 
+    // Self-test path (gated by env var, see SCK migration brief §3.5).
+    // This is the only way to verify the new capture path with REAL pixels
+    // from the REAL signed app — `cargo test` cannot capture the screen
+    // (Screen-Recording TCC grant is tied to the signed application, not
+    // to a test binary) and the agent cannot drive the GUI (no
+    // Accessibility grant).
+    //
+    // Run with:
+    //   CLIPTOALL_SELFTEST_CAPTURE=1 ./target/<triple>/debug/cliptoall-tauri2
+    //
+    // Effect: capture several times at startup, compare the result against a
+    // `/usr/sbin/screencapture` reference, assert on dimensions / scale /
+    // alpha / channel order / colour / shear, write a PNG, then exit with a
+    // non-zero status if any assertion failed. Cannot fire during normal use.
+    // The logic lives in `sck_selftest` — see that module's header for why it
+    // is built around an external oracle rather than around a human looking
+    // at a screenshot.
+    #[cfg(target_os = "macos")]
+    if std::env::var("CLIPTOALL_SELFTEST_CAPTURE").ok().as_deref() == Some("1") {
+        // Force the file logger ON so the orchestrator can read timings
+        // from ~/Library/Application Support/ClipToAll/logs/cliptoall.log.
+        LOGGING_ON.store(true, Ordering::Relaxed);
+        // Run synchronously on the main thread — spawning then calling
+        // std::process::exit was observed to lose the last log lines. The
+        // capture itself blocks on an SCK completion handler, which is
+        // delivered on SCK's own dispatch queue, not on this thread, so
+        // blocking here does not deadlock (brief §4.6 covers the same point
+        // for the real hot path, which runs on a spawned thread).
+        let code = sck_selftest::run();
+        // Sync the log file so every line above is durable before we exit;
+        // std::process::exit() bypasses Drop.
+        if let Ok(f) = std::fs::OpenOptions::new().create(true).append(true).open(log_file_path("cliptoall.log")) {
+            let _ = f.sync_all();
+        }
+        std::process::exit(code);
+    }
+
     tauri::Builder::default()
         .manage(PendingResults(Mutex::new(HashMap::new())))
         .manage(commands::gdrive_pool::init_pool())
@@ -768,6 +812,12 @@ fn main() {
             {
                 let prewarm_app = app.handle().clone();
                 std::thread::spawn(move || {
+                    // SCShareableContent FIRST (so the overlay prewarm that
+                    // reads primary_monitor_logical_bounds has it cached),
+                    // then the overlay window, then the Results window.
+                    let t0 = std::time::Instant::now();
+                    #[cfg(target_os = "macos")]
+                    sck_capture::prewarm_capture_backend(t0);
                     overlay_web::prewarm(&prewarm_app);
                     // Same reasoning for the Results window — a cold
                     // WKWebView is what made it appear a second or two
@@ -775,6 +825,19 @@ fn main() {
                     results_spare::prewarm(&prewarm_app);
                 });
             }
+
+            // Install the NSApplicationDidChangeScreenParametersNotification
+            // observer so the cached SCShareableContent is dropped *eagerly*
+            // when a display is connected/disconnected, the resolution
+            // changes, or the lid closes. Without this, the first capture
+            // after any of those events is the one that discovers the
+            // staleness — either via a captureImage error or, worse, via a
+            // silent capture of the wrong screen. Eager invalidation costs at
+            // most one extra getShareableContent round-trip on the next
+            // capture (~50-70 ms) when the notification fires spuriously.
+            // See sck_notifications.rs for the full reasoning.
+            #[cfg(target_os = "macos")]
+            sck_notifications::install_once();
 
             // Housekeeping + plugin startup run in a BACKGROUND thread. Both can be
             // slow — cleanup scans %TEMP%, and each plugin's hello handshake can take

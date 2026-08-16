@@ -153,7 +153,26 @@ impl Default for AppSettings {
             logging_on: false,
             storage_type: "gdrive".to_string(),
             google_drive_folder: "public-images".to_string(),
+            // Default output handling differs by platform, because the same
+            // "resize" rule costs very different amounts of detail.
+            //
+            // Windows DPI scaling is typically 125-150%, so resizing a capture
+            // down to logical size discards relatively little. macOS Retina is a
+            // flat 2x: resizing throws away three quarters of the pixels, and
+            // text in a shared screenshot comes out visibly soft. "exif" keeps
+            // every pixel and instead tags the JPEG's density, so browsers still
+            // display it at logical size (per the 2021 WHATWG density
+            // correction) while zoom and Retina viewers get the full detail.
+            //
+            // Only the default differs — all three modes remain selectable on
+            // both platforms, and an existing settings file is untouched.
+            #[cfg(target_os = "macos")]
+            downscale_for_dpi: false,
+            #[cfg(not(target_os = "macos"))]
             downscale_for_dpi: true,
+            #[cfg(target_os = "macos")]
+            output_mode: "exif".to_string(),
+            #[cfg(not(target_os = "macos"))]
             output_mode: "resize".to_string(),
             theme: "crimson".to_string(),
             results_width: 850.0,

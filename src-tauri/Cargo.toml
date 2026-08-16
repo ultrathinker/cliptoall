@@ -42,7 +42,24 @@ winreg = "0.52"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", default-features = false, features = ["apple-native"] }
+# ScreenCaptureKit — replaces `xcap` for capture (Phase 2.3 / SCK migration).
+# `SCScreenshotManager.captureImage` is macOS 14+, which is the floor this
+# project committed to on 2026-08-16 (EXECUTION-PLAN.md §2). Default features
+# already pull in SCShareableContent + SCScreenshotManager + CG/CF bindings.
+objc2-screen-capture-kit = { version = "0.3", default-features = true, features = ["SCScreenshotManager", "SCShareableContent"] }
+# Already pulled in transitively by the crates above, but bug #7 in HANDOFF
+# and §3.1 of the SCK migration brief say: "being in Cargo.lock transitively
+# is NOT the same as being usable" — anything we name in code must be declared
+# explicitly under the same target gate.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSError"] }
+objc2-core-graphics = { version = "0.3", features = ["CGImage", "CGColorSpace", "CGContext", "CGDataProvider", "CGDirectDisplay"] }
+objc2-core-foundation = { version = "0.3", features = ["CFCGTypes"] }
+block2 = "0.6"
 
 [target."cfg(not(windows))".dependencies]
 arboard = "3.6.1"
-xcap = "0.9.8"
+# Clipboard images on macOS/Linux use `arboard::set_image`. `xcap` was used
+# historically here for screen capture; SCK migration removed the only
+# consumer. If anything regresses (see HANDOFF §6 for the catalogue), the
+# former `xcap = "0.9.8"` line was gated under this same target.

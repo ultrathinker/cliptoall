@@ -5,7 +5,7 @@
   import { loadSettings, getPendingImage, setupEditorWindow, restoreResultsWindow } from './lib/api';
   import { applyTheme } from './lib/stores/theme';
   import { settings, defaultSettings } from './lib/stores/settings';
-  import { session, initSession, markSkipped, startUpload, applyEditedPath, currentImagePath, updateUrl } from './lib/stores/session.svelte';
+  import { session, initSession, markSkipped, startUpload, applyEditedPath, currentImagePath, updateUrl, markContentReady } from './lib/stores/session.svelte';
   import Settings from './windows/Settings.svelte';
   import About from './windows/About.svelte';
   import Results from './windows/Results.svelte';
@@ -115,6 +115,13 @@
     listen('gdrive-url-updated', (event) => {
       const p = event.payload as { callId: number; url: string };
       updateUrl(p.callId, p.url);
+    });
+
+    // GDrive pool: the background PATCH landed, so the already-shared link now
+    // serves the real image instead of the blank placeholder.
+    listen('gdrive-content-ready', (event) => {
+      const p = event.payload as { callId: number };
+      markContentReady(p.callId);
     });
 
     if (isMainWindow) {
