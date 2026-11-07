@@ -262,6 +262,8 @@ fn handle_overlay_result(
                         ),
                         None => {
                             log(&format!("  plugin not running: {}", path));
+                            #[cfg(target_os = "macos")]
+                            report_plugin_problem(app, "The plugin for this key is not running. Open Settings > Plugins, check that it is enabled and configured, and click Save.".to_string());
                             None
                         }
                     };
@@ -272,6 +274,8 @@ fn handle_overlay_result(
                                 if let Some(msg) = &result.message {
                                     log(&format!("  plugin error: {}", msg));
                                 }
+                                #[cfg(target_os = "macos")]
+                                report_plugin_problem(app, result.message.clone().unwrap_or_else(|| "The plugin reported an error.".to_string()));
                                 #[cfg(windows)]
                                 if result.action.as_deref() == Some("admin_required")
                                     && crate::aumid::show_admin_dialog() {
@@ -281,6 +285,8 @@ fn handle_overlay_result(
                         }
                         Some(Err(e)) => {
                             log(&format!("  plugin call failed: {} | +{}ms", e, t0.elapsed().as_millis()));
+                            #[cfg(target_os = "macos")]
+                            report_plugin_problem(app, format!("The plugin call failed: {}", e));
                         }
                         None => {}
                     }
@@ -395,6 +401,20 @@ fn handle_overlay_result(
             log(&format!("  selection cancelled | +{}ms", t0.elapsed().as_millis()));
         }
     }
+}
+
+/// macOS: tell the user why a plugin key did nothing (no plugin running, the
+/// plugin's own error such as a missing password or an empty clipboard, or a
+/// failed call) instead of failing silently. Same route as the Screen
+/// Recording notice: show the main window, then let App.svelte raise its
+/// alert. Windows keeps its historical behaviour (logged only).
+#[cfg(all(plugins, target_os = "macos"))]
+fn report_plugin_problem(app: &AppHandle, message: String) {
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.set_focus();
+    }
+    let _ = app.emit("plugin-call-failed", serde_json::json!({ "message": message }));
 }
 
 /// Capture screen, show native overlay, crop, then open a NEW results window.

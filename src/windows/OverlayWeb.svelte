@@ -284,6 +284,19 @@
     cancel();
   }
 
+  /**
+   * The plugin key a keystroke stands for, by PHYSICAL key, like the Windows
+   * overlay (which maps virtual-key codes): `e.code` is "KeyE" for the E key
+   * whatever the input source, while `e.key` follows the layout, so with a
+   * Russian layout the E key arrives as "у" and never matched a binding.
+   * Falls back to `e.key` for keys outside A-Z / 0-9.
+   */
+  function pluginKeyOf(e: KeyboardEvent): string | null {
+    const m = /^(?:Key([A-Z])|Digit([0-9]))$/.exec(e.code);
+    if (m) return m[1] ?? m[2];
+    return e.key.length === 1 ? e.key.toUpperCase() : null;
+  }
+
   function onKeyDown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
       cancel();
@@ -295,8 +308,9 @@
     }
     // Plugin hotkeys: single alphanumeric char, case-insensitive — works
     // whether or not a selection is in progress (OVERLAY-SPEC.md §6).
-    if (e.key.length === 1 && finished === false) {
-      const entry = keyMap[e.key.toUpperCase()];
+    const pluginKey = pluginKeyOf(e);
+    if (pluginKey && finished === false) {
+      const entry = keyMap[pluginKey];
       if (entry) {
         finished = true;
         // Same wipe-then-report ordering as finish()/cancel(): this is also an

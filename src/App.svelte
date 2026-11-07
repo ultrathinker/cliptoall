@@ -151,6 +151,16 @@
       );
     });
 
+    // A plugin key in the capture overlay did not work (macOS plugin builds
+    // only; see report_plugin_problem in main.rs, which shows this window
+    // first). The message is the plugin's own (e.g. "No encryption password
+    // configured") or the host's reason.
+    if (isMainWindow) {
+      listen<{ message: string }>('plugin-call-failed', (event) => {
+        showAlert('Plugin: ' + (event.payload?.message || 'unknown error'));
+      });
+    }
+
     if (isMainWindow) {
       // Main window — tray app, settings, about
       currentWindow = 'main';
