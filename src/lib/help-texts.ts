@@ -9,22 +9,26 @@
 // for translation/review. Add a branch only when the platforms actually
 // diverge; do not branch for the sake of it.
 //
-// Build features: this file also branches on PLUGINS_ENABLED (TASK B /
-// Phase 4a). The Mac App Store edition strips out the entire plugin system,
-// so any sentence that mentions plugins in the user guide, and the entire
-// `guidePlugins` developer reference, is omitted. PLUGINS_ENABLED is a
-// Vite-time define (see vite.config.ts and lib/features.ts), so the
-// `false` branch is dead-stripped at build time and never ships in the
-// store bundle.
+// Build features: the texts also depend on what the running binary has
+// (lib/features.ts, asked of the backend at runtime). Without the plugin
+// system (the default macOS build) every sentence that mentions plugins in
+// the user guide, and the whole `guidePlugins` developer reference, is left
+// out; and the personal macOS build keeps its data under its own directory
+// name. Hence a function of those two values rather than a constant; the
+// body below keeps its original indentation to keep the history readable.
 
 import { IS_MAC } from './platform';
-import { PLUGINS_ENABLED } from './features';
 
+export type HelpTexts = Record<string, { title: string; text: string }>;
+
+/**
+ * @param pluginsEnabled the plugin system is compiled in (`$capabilities.plugins`)
+ * @param macAppDir this build's directory under ~/Library/Application Support
+ */
+export function buildHelpTexts(pluginsEnabled: boolean, macAppDir: string = 'ClipToAll'): HelpTexts {
 // Help texts common to every build. The plugin-only help text (developer
-// reference for writing plugins) lives in `pluginHelpTexts` below, gated by
-// PLUGINS_ENABLED so the long developer manual is dead-stripped from the
-// store build's bundle.
-const baseHelpTexts: Record<string, { title: string; text: string }> = {
+// reference for writing plugins) lives in `pluginHelpTexts` below.
+const baseHelpTexts: HelpTexts = {
     autoclose: {
       title: 'Autoclose in 30 seconds',
       text: 'When enabled, the Results window (that shows after a screenshot) will automatically close after 30 seconds. This keeps your desktop clean — once the link is copied to your clipboard, you probably don\'t need the window anymore. If you disable this, the Results window stays open until you close it manually.',
@@ -45,7 +49,7 @@ const baseHelpTexts: Record<string, { title: string; text: string }> = {
       // in main.rs writes under the OS config dir on every platform.
       text: `When enabled, ClipToAll writes detailed timing and debug information to a log file. This is useful for troubleshooting if something isn't working right — you can see exactly what the app is doing step by step. Keep it off for normal use to avoid unnecessary disk writes.
 
-The log lives at ${IS_MAC ? '~/Library/Application Support/ClipToAll/logs/cliptoall.log' : '%APPDATA%\\ClipToAll\\logs\\cliptoall.log'}, and rotates once it reaches 25 MB (one previous generation is kept as cliptoall.log.old).`,
+The log lives at ${IS_MAC ? `~/Library/Application Support/${macAppDir}/logs/cliptoall.log` : '%APPDATA%\\ClipToAll\\logs\\cliptoall.log'}, and rotates once it reaches 25 MB (one previous generation is kept as cliptoall.log.old).`,
     },
     outputMode: {
       title: 'Shared image size on HiDPI displays',
@@ -125,7 +129,7 @@ From the Results window, click the Edit button to open the built-in image editor
 \nYou get 7 colors, 3 brush sizes, and full undo/redo support (up to 50 steps). When done, save the edited image back.
 
 CLIPBOARD ENCRYPTION
-${PLUGINS_ENABLED
+${pluginsEnabled
   ? 'ClipToAll includes a handy clipboard encryption feature via the Clipboard Encryption plugin. While the capture overlay is visible, press the assigned encrypt or decrypt shortcut key to transform clipboard text using AES-256.\n\nShortcut keys are shown and configurable in Settings > Plugins. The encryption password is set in the plugin\'s Settings. This is useful for quickly encrypting sensitive text before pasting it somewhere.'
   : 'ClipToAll\'s core capture and sharing features work without any plugins. Plugins (custom scripts that run during capture, like the Clipboard Encryption plugin) are a Developer-ID-edition extension and are not included in this build.'}
 
@@ -138,7 +142,7 @@ KEYBOARD SHORTCUTS SUMMARY
 \n${IS_MAC ? 'Cmd+X' : 'Alt+X'} — start capture (or your custom hotkey)
 ${IS_MAC ? 'Cmd+X, Cmd+X' : 'Alt+X, X'} — double-press to toggle mode during capture
 Escape — cancel capture / hide Results window
-${PLUGINS_ENABLED ? 'Plugin shortcut keys — shown in Settings > Plugins (e.g. encrypt, decrypt, ungroup)' : '(plugin shortcut keys are not available in this build)'}
+${pluginsEnabled ? 'Plugin shortcut keys — shown in Settings > Plugins (e.g. encrypt, decrypt, ungroup)' : '(plugin shortcut keys are not available in this build)'}
 
 FIRST-TIME SETUP
 1. Launch ClipToAll — it appears in the ${IS_MAC ? 'menu bar' : 'system tray'}
@@ -150,9 +154,9 @@ FIRST-TIME SETUP
     },
 };
 
-// Plugin-only developer reference for writing plugins. Whole entry is
-// dead-stripped from the store build — see the file header for why.
-const pluginHelpTexts: Record<string, { title: string; text: string }> = PLUGINS_ENABLED
+// Plugin-only developer reference for writing plugins. Left out entirely
+// when the build has no plugin system — see the file header.
+const pluginHelpTexts: HelpTexts = pluginsEnabled
   ? {
     guidePlugins: {
       title: 'Plugins — Developer Guide',
@@ -228,7 +232,9 @@ You can write plugins in any language that can read stdin and write stdout:
 \nThe only requirement: ${IS_MAC ? 'produce a standalone executable that the app can launch' : 'compile to a standalone .exe on Windows'}.
 
 DEPLOYMENT
-Place your plugin file in the plugins/ folder next to ClipToAll${IS_MAC ? '.app/Contents/MacOS/' : '.exe'}. On next launch (or when the user clicks the Plugins tab), ClipToAll discovers it automatically.
+${IS_MAC
+  ? `Place your plugin file in ~/Library/Application Support/${macAppDir}/plugins/ (outside the app bundle, so the app's signature stays intact). The folder is private to your user account; the file must be a regular executable file (not a symlink) that only you can write to, and on Apple silicon it must be code-signed. On next launch`
+  : 'Place your plugin file in the plugins/ folder next to ClipToAll.exe. On next launch'} (or when the user clicks the Plugins tab), ClipToAll discovers it automatically.
 
 PLUGIN SETTINGS & SECURITY
 If your plugin needs configuration (passwords, API keys, etc.), declare settings_description and settings_format in the hello message. The user enters a JSON string in the Settings UI. This string is encrypted ${IS_MAC ? 'in the macOS Keychain' : 'with Windows DPAPI'} before being saved to disk and is passed to your plugin in the call context.
@@ -287,9 +293,10 @@ Use the "Add Script" button in the Plugins tab, or manually create a .py/.cs fil
   }
   : {};
 
-// Combined help text map: base + plugin-specific entries. The plugin
-// entries are dead-stripped from the store build (above ternary).
-export const helpTexts: Record<string, { title: string; text: string }> = {
+// Combined help text map: base + plugin-specific entries (the latter empty
+// without a plugin system, see the ternary above).
+return {
   ...baseHelpTexts,
   ...pluginHelpTexts,
 };
+}

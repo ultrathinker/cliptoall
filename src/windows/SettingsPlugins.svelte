@@ -9,6 +9,7 @@
   import { pythonTemplate, csharpTemplate, powershellTemplate, getAiInstructions } from '../lib/plugin-templates';
   import { showAlert } from '../lib/stores/alert.svelte';
   import { IS_MAC } from '../lib/platform';
+  import { capabilities } from '../lib/features';
   import '../lib/settings-plugins.css';
 
   // The three fields the parent's handleSave needs are $bindable so they survive
@@ -408,12 +409,12 @@
       </select>
       <input class="plugins-search" type="text" placeholder="Search plugins..." bind:value={pluginSearch} />
     </div>
-    <!-- plugins_dir() in plugins.rs resolves to <exe dir>/plugins, which on
-         macOS is inside the .app bundle — "next to ClipToAll.exe" is wrong
-         there in both wording and location. -->
+    <!-- plugins_dir() in plugins.rs: <exe dir>/plugins on Windows; on macOS
+         ~/Library/Application Support/<app>/plugins (outside the bundle),
+         reported by the backend so the personal build shows its own path. -->
     <p class="plugins-hint">
       {#if IS_MAC}
-        Place plugins in the <code>plugins/</code> folder inside the app bundle (<code>ClipToAll.app/Contents/MacOS/plugins/</code>)
+        Place plugins (signed executables) in <code>{$capabilities.pluginsDir ?? `~/Library/Application Support/${$capabilities.appDirName}/plugins`}</code>
       {:else}
         Place plugins in the <code>plugins/</code> folder next to ClipToAll.exe
       {/if}
@@ -460,7 +461,10 @@
                 <button class="plugin-link" onclick={() => handleRunScript(plugin)} disabled={scriptRunning[plugin.path] || !runtimeOk}>
                   {scriptRunning[plugin.path] ? 'Running...' : 'Run'}
                 </button>
-                <button class="plugin-link" onclick={() => handleRunInTerminal(plugin)} disabled={!runtimeOk} title="Open in PowerShell (interactive, stays open)">PS</button>
+                {#if !IS_MAC}
+                  <!-- run_script_in_terminal opens PowerShell: Windows only. -->
+                  <button class="plugin-link" onclick={() => handleRunInTerminal(plugin)} disabled={!runtimeOk} title="Open in PowerShell (interactive, stays open)">PS</button>
+                {/if}
                 <button class="plugin-link" onclick={() => handleEditScript(plugin)}>Edit</button>
                 <button class="plugin-link plugin-link-danger" onclick={() => handleDeleteScript(plugin)}>Del</button>
               {/if}

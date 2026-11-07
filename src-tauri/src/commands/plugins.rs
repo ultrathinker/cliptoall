@@ -192,10 +192,12 @@ pub fn run_script(window: tauri::Window, path: String) -> Result<String, String>
         "ps1" => PluginType::PowerShell,
         _ => return Err(format!("Unsupported extension: {}", ext)),
     };
+    #[cfg(not(windows))]
+    PluginManager::check_launchable(&path, plugin_type)?;
 
     let mut cmd = match plugin_type {
         PluginType::Python => {
-            let mut c = std::process::Command::new("python");
+            let mut c = std::process::Command::new(crate::plugins::python_program());
             c.arg(&path);
             c
         }
@@ -369,7 +371,7 @@ pub fn precompile_script(window: tauri::Window, path: String) -> Result<String, 
 
 fn plugin_config_path() -> std::path::PathBuf {
     let mut path = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    path.push("ClipToAll");
+    path.push(crate::utils::app_identity::APP_NAME);
     std::fs::create_dir_all(&path).ok();
     path.push("plugins.json");
     path

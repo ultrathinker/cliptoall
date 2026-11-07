@@ -120,7 +120,7 @@ pub fn overlay_finish(window: tauri::Window, x: i32, y: i32, width: i32, height:
 }
 
 #[tauri::command]
-#[cfg(windows)]
+#[cfg(plugins)]
 pub fn overlay_plugin_call(window: tauri::Window, path: String, function_id: String) -> Result<(), String> {
     require_overlay_window(&window)?;
     send_result(Some(OverlayResult::PluginCall { path, function_id }))

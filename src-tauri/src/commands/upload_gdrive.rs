@@ -173,7 +173,7 @@ struct GoogleTokenResponse {
 
 fn get_token_path() -> PathBuf {
     let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("ClipToAll");
+    path.push(crate::utils::app_identity::APP_NAME);
     fs::create_dir_all(&path).ok();
     path.push("gdrive_token.json");
     path

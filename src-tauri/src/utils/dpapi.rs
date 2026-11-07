@@ -133,9 +133,11 @@ pub fn decrypt_field(value: &str) -> String {
 // ── macOS: Keychain-backed store ────────────────────────────────
 
 /// Service name all ClipToAll Keychain entries are filed under (visible in
-/// Keychain Access.app as the entries' "Where" column).
+/// Keychain Access.app as the entries' "Where" column). "ClipToAll" in the
+/// public build, "ClipToAll Personal" in the personal one (app_identity.rs),
+/// so the two never read or overwrite each other's secrets.
 #[cfg(target_os = "macos")]
-const KEYCHAIN_SERVICE: &str = "ClipToAll";
+const KEYCHAIN_SERVICE: &str = crate::utils::app_identity::APP_NAME;
 
 /// Prefix for Keychain-backed fields stored inline in JSON — analogous to
 /// Windows' "dpapi:" prefix, but the payload is an account name, not ciphertext.

@@ -9,10 +9,10 @@ mod geometry;
 mod overlay;
 #[cfg(not(windows))]
 mod overlay_web;
-/// The plugin manager is gated by the `plugins` Cargo feature (TASK B /
-/// Phase 4a). The Mac App Store edition compiles this out with
-/// `--no-default-features`; every reference below is similarly cfg-gated.
-#[cfg(windows)]
+/// The plugin manager exists only under `cfg(plugins)`: Windows always,
+/// macOS only with `--features personal` (build.rs sets the cfg; Cargo.toml
+/// explains why). Every reference below is gated the same way.
+#[cfg(plugins)]
 mod plugins;
 #[cfg(not(windows))]
 mod results_spare;
@@ -168,7 +168,7 @@ struct PendingResults(Mutex<HashMap<String, PendingImage>>);
 /// the app is installed in Program Files, unlike a path next to the exe — BUGS#11).
 fn log_file_path(name: &str) -> std::path::PathBuf {
     let mut dir = dirs::config_dir().unwrap_or_else(std::env::temp_dir);
-    dir.push("ClipToAll");
+    dir.push(crate::utils::app_identity::APP_NAME);
     dir.push("logs");
     let _ = std::fs::create_dir_all(&dir);
     dir.push(name);
@@ -226,14 +226,14 @@ fn handle_overlay_result(
     match overlay_result {
         Some(geometry::OverlayResult::PluginCall { path, function_id }) => {
             // Keep the variant and the arm regardless so the match stays
-            // exhaustive on every feature combo. The body is what flips:
-            // with `--no-default-features` the App Store build still receives
-            // an `OverlayResult::PluginCall` (the variant is in `geometry`,
+            // exhaustive on every build. The body is what flips: a build
+            // without `cfg(plugins)` (the default macOS build) still knows
+            // `OverlayResult::PluginCall` (the variant is in `geometry`,
             // shared), but has no `plugins` module to dispatch to — log and
             // drop. In practice the overlay never sends one (no key bindings
-            // are registered when plugins are off), but if a future change
-            // forgot to gate the JS side we want a clear log line, not a panic.
-            #[cfg(windows)]
+            // exist and `overlay_plugin_call` is not registered), but if a
+            // future change forgot a gate we want a clear log line, not a panic.
+            #[cfg(plugins)]
             {
                 log(&format!("  plugin call: {} → {} | +{}ms", path, function_id, t0.elapsed().as_millis()));
 
@@ -284,9 +284,9 @@ fn handle_overlay_result(
                     }
                 }
             }
-            #[cfg(not(windows))]
+            #[cfg(not(plugins))]
             {
-                log(&format!("  plugin call {} → {} ignored: plugins feature is off", path, function_id));
+                log(&format!("  plugin call {} → {} ignored: no plugin system in this build", path, function_id));
                 let _ = (path, function_id);
             }
         }
@@ -535,8 +535,10 @@ fn start_capture(app: AppHandle) {
         };
         log(&format!("  capture_to_memory OK ({}x{}) | +{}ms", capture.width, capture.height, t0.elapsed().as_millis()));
 
+        // Plugin hotkeys for the overlay (personal build only; empty, and
+        // `overlay_plugin_call` unregistered, without `cfg(plugins)`).
         let key_map = {
-            #[cfg(windows)]
+            #[cfg(plugins)]
             {
                 if let Some(state) = app.try_state::<plugins::PluginManagerState>() {
                     let mgr = state.0.lock();
@@ -545,7 +547,7 @@ fn start_capture(app: AppHandle) {
                     std::collections::HashMap::new()
                 }
             }
-            #[cfg(not(windows))]
+            #[cfg(not(plugins))]
             {
                 std::collections::HashMap::<String, (String, String)>::new()
             }
@@ -652,7 +654,7 @@ fn open_settings_tab(app: AppHandle, tab: String) -> Result<(), String> {
     // and an unknown tab would leave the Settings window on a blank pane.
     let tab = match tab.as_str() {
         "general" | "storage" => tab,
-        #[cfg(windows)]
+        #[cfg(plugins)]
         "plugins" => tab,
         other => return Err(format!("unknown settings tab: {}", other)),
     };
@@ -858,17 +860,17 @@ fn main() {
         std::process::exit(code);
     }
 
-    // Plugin manager state is gated by the `plugins` Cargo feature (TASK B /
-// Phase 4a). The cfg attribute cannot sit directly on a `.manage(...)` call
+    // Plugin manager state exists only under `cfg(plugins)` (see `mod plugins`).
+// The cfg attribute cannot sit directly on a `.manage(...)` call
 // in a builder chain (the parser attaches it to the prior statement), so the
 // conditional manage is hoisted into its own `let` binding instead.
     let builder = tauri::Builder::default()
         .manage(PendingResults(Mutex::new(HashMap::new())))
         .manage(commands::gdrive_pool::init_pool());
     let builder = {
-        #[cfg(windows)]
+        #[cfg(plugins)]
         { builder.manage(plugins::PluginManagerState(Mutex::new(plugins::PluginManager::new()))) }
-        #[cfg(not(windows))]
+        #[cfg(not(plugins))]
         { builder }
     };
     builder
@@ -898,6 +900,22 @@ fn main() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
+            // A `--features personal` binary must run with the personal
+            // overlay's identifier (see app_identity::PERSONAL_IDENTIFIER):
+            // e.g. `tauri dev --features personal` without
+            // `--config src-tauri/tauri.personal.conf.json` would otherwise be
+            // half public app, half personal build.
+            #[cfg(feature = "personal")]
+            if app.config().identifier != utils::app_identity::PERSONAL_IDENTIFIER {
+                let msg = format!(
+                    "personal build started with identifier '{}' instead of '{}': build it with --config src-tauri/tauri.personal.conf.json",
+                    app.config().identifier, utils::app_identity::PERSONAL_IDENTIFIER
+                );
+                eprintln!("{}", msg);
+                log(&msg);
+                std::process::exit(1);
+            }
+
             // Load settings FIRST so LOGGING_ON is set before anything else runs —
             // then the lifecycle breadcrumbs below actually write WHEN the user has
             // the "Write to Log File" option on (they all go through log(), which is
@@ -922,7 +940,7 @@ fn main() {
             // Create tray icon
             let _tray = TrayIconBuilder::new()
                 .icon(tauri::include_image!("icons/ClipToAll-32x32.png"))
-                .tooltip("ClipToAll")
+                .tooltip(utils::app_identity::APP_NAME)
                 .menu(&menu)
                 .show_menu_on_left_click(false) // Left click = capture, not menu
                 .on_menu_event(|app, event| {
@@ -960,8 +978,9 @@ fn main() {
                             // the plugin lock: if a plugin op is stuck holding it, we must
                             // still exit. try_lock skips the stop rather than hanging; the
                             // plugin children die anyway via the Job Object's
-                            // KILL_ON_JOB_CLOSE when this process exits.
-                            #[cfg(windows)]
+                            // KILL_ON_JOB_CLOSE when this process exits (on macOS
+                            // they see EOF on stdin and exit, per the protocol).
+                            #[cfg(plugins)]
                             if let Some(state) = app.try_state::<plugins::PluginManagerState>() {
                                 if let Some(mut mgr) = state.0.try_lock() {
                                     plugins::PluginManager::stop_all(&mut mgr);
@@ -1058,8 +1077,8 @@ fn main() {
             // event is processed, so "Exit does nothing". Doing it off-thread keeps
             // the tray/hotkey live from the first moment.
             //
-            // The plugin startup block is cfg-gated by the `plugins` Cargo feature
-            // (TASK B / Phase 4a). Temp cleanup is shared and stays unconditional;
+            // The plugin startup block is gated by `cfg(plugins)` (see
+            // `mod plugins`). Temp cleanup is shared and stays unconditional;
             // when plugins are off the handle is unused but the closure still runs
             // the cleanup, so suppress the unused warning at the binding.
             #[allow(unused_variables)]
@@ -1070,7 +1089,7 @@ fn main() {
                 commands::capture::cleanup_temp_files();
                 log("startup(bg): temp cleanup done");
 
-                #[cfg(windows)]
+                #[cfg(plugins)]
                 {
                     // Start enabled plugins from saved config.
                     let plugin_configs = commands::plugins::load_plugin_configs_sync();
@@ -1179,25 +1198,26 @@ fn main() {
             setup_editor_window,
             restore_results_window,
             update_hotkey,
-            #[cfg(windows)]
+            commands::app_capabilities,
+            #[cfg(plugins)]
             commands::plugins::discover_plugins,
-            #[cfg(windows)]
+            #[cfg(plugins)]
             commands::plugins::apply_plugin_config,
-            #[cfg(windows)]
+            #[cfg(plugins)]
             commands::plugins::load_plugin_configs,
-            #[cfg(windows)]
+            #[cfg(plugins)]
             commands::plugins::run_script,
-            #[cfg(windows)]
+            #[cfg(plugins)]
             commands::plugins::run_script_in_terminal,
-            #[cfg(windows)]
+            #[cfg(plugins)]
             commands::plugins::save_script,
-            #[cfg(windows)]
+            #[cfg(plugins)]
             commands::plugins::delete_script,
-            #[cfg(windows)]
+            #[cfg(plugins)]
             commands::plugins::check_runtime,
-            #[cfg(windows)]
+            #[cfg(plugins)]
             commands::plugins::read_script,
-            #[cfg(windows)]
+            #[cfg(plugins)]
             commands::plugins::precompile_script,
             #[cfg(not(windows))]
             overlay_web::overlay_get_meta,
@@ -1205,8 +1225,7 @@ fn main() {
             overlay_web::overlay_get_pixels,
             #[cfg(not(windows))]
             overlay_web::overlay_finish,
-            #[cfg(not(windows))]
-            #[cfg(windows)]
+            #[cfg(all(not(windows), plugins))]
             overlay_web::overlay_plugin_call,
             #[cfg(not(windows))]
             overlay_web::overlay_cancel,

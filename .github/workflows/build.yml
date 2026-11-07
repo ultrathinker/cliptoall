@@ -54,6 +54,33 @@ jobs:
       - name: Test (Rust)
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+      # The personal macOS build (`--features personal`, plugin system on; see
+      # docs/macos-port/PERSONAL-BUILD.md). Compiled, linted and tested here so
+      # it cannot rot, but never bundled or uploaded. Only the app crate
+      # recompiles for the feature, so these steps are cheap; Windows skips
+      # them (its plugin system is always on, so it has one configuration).
+      # The frontend has no build-time variant (it asks the binary at runtime),
+      # so the `npm run check` above covers both configurations.
+      - name: Clippy (personal feature)
+        if: matrix.os == 'macos-latest'
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features personal -- -D warnings
+
+      - name: Test (Rust, personal feature)
+        if: matrix.os == 'macos-latest'
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features personal
+
+      # Default macOS binary must contain no plugin system, the personal one
+      # must: builds both and greps them for the marker (see the script).
+      - name: Plugin gate (default vs personal)
+        if: matrix.os == 'macos-latest'
+        run: ./scripts/check-plugin-gate.sh
+
+      - name: Build + test encryption plugin (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          cargo build --manifest-path plugins/encryption-plugin/Cargo.toml
+          cargo test --manifest-path plugins/encryption-plugin/Cargo.toml
+
       # Build the standalone plugin crates (separate Cargo workspaces, each with
       # its own Cargo.toml under plugins/<crate>/). `aumid-plugin` uses windows-rs
       # and only compiles on Windows, hence the guard.

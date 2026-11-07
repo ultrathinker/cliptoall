@@ -1,0 +1,12 @@
+{
+  "$schema": "gen/schemas/macOS-schema.json",
+  "productName": "ClipToAll Personal",
+  "identifier": "com.ultrathinker.cliptoall.personal",
+  "bundle": {
+    "targets": ["app"],
+    "macOS": {
+      "entitlements": "Entitlements-direct.plist",
+      "hardenedRuntime": true
+    }
+  }
+}
