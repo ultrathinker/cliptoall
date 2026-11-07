@@ -9,7 +9,7 @@ Press a hotkey, select a region, and the link (or the image itself) is on your c
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![build](https://github.com/ultrathinker/cliptoall/actions/workflows/build.yml/badge.svg)](https://github.com/ultrathinker/cliptoall/actions/workflows/build.yml)
 [![release](https://github.com/ultrathinker/cliptoall/actions/workflows/release.yml/badge.svg)](https://github.com/ultrathinker/cliptoall/actions/workflows/release.yml)
-![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6)
+![Platform: Windows | macOS](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-0078D6)
 ![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24C8DB)
 ![Svelte 5](https://img.shields.io/badge/Svelte-5-FF3E00)
 ![Rust](https://img.shields.io/badge/Rust-backend-000000)
@@ -31,10 +31,12 @@ The app is built on **Tauri 2** (Rust backend + WebView2) with a **Svelte 5** fr
 | Platform | Status |
 |----------|--------|
 | Windows 10 / 11 | ✅ Supported |
-| macOS | 🚧 Planned (see [Roadmap](#roadmap)) |
+| macOS 14 Sonoma or later (Apple silicon) | ✅ Supported — signed and notarized `.dmg` (see [Download](#download)) |
 | Linux (X11 / Wayland) | 🚧 Planned (see [Roadmap](#roadmap)) |
 
-The backend currently uses Win32 APIs for screen capture, clipboard, the region-select overlay, and secret storage, so today it runs on Windows only. macOS/Linux support is a planned effort — contributions welcome.
+The Windows build uses Win32 APIs; the macOS build uses ScreenCaptureKit for capture, the system pasteboard for the clipboard, the Keychain for secrets, and a webview-based region-select overlay. Linux support is a planned effort — contributions welcome.
+
+macOS limitations in this first release: Apple silicon only (no Intel build), capture covers the primary display only, and the plugin system is Windows-only for now.
 
 ## Features
 
@@ -61,7 +63,21 @@ The backend currently uses Win32 APIs for screen capture, clipboard, the region-
 
 ## Download
 
-Prebuilt Windows binaries are published on the **[Releases](https://github.com/ultrathinker/cliptoall/releases)** page.
+Prebuilt binaries for Windows and macOS are published on the **[Releases](https://github.com/ultrathinker/cliptoall/releases)** page.
+
+### macOS
+
+Download **`ClipToAll-<version>-macos-arm64.dmg`** from the latest release tagged `macos-v*` (a `.sha256` file is attached for verification). The app is signed with a Developer ID certificate and notarized by Apple, so Gatekeeper opens it without warnings.
+
+Requirements: **macOS 14 Sonoma or later** on an **Apple silicon** Mac.
+
+1. Open the `.dmg` and drag **ClipToAll** into **Applications**, then launch it.
+2. On the first capture macOS asks for **Screen Recording** permission. Enable ClipToAll in **System Settings → Privacy & Security → Screen & System Audio Recording**, then quit and reopen the app if macOS asks you to.
+3. The default hotkey is **Ctrl+Cmd+X** (Cmd+X is Cut in every app, so it is not used). Change it in Settings.
+
+Supported destinations are the same as on Windows: your own **Amazon S3** bucket or **Google Drive**. Secrets are stored in the macOS Keychain and settings live in `~/Library/Application Support/ClipToAll`.
+
+### Windows
 
 Each release is produced by [`release.yml`](.github/workflows/release.yml), which is triggered by a `v*` tag and runs `tauri build` on Windows via `tauri-apps/tauri-action`. It attaches two artifacts:
 
@@ -99,7 +115,7 @@ The executable is produced under `src-tauri/target/release/`, and the installer 
 
 ## Usage
 
-1. Press **Alt+X** and drag to select a screen region.
+1. Press **Alt+X** (**Ctrl+Cmd+X** on macOS) and drag to select a screen region.
 2. Release — the region is captured and the Results window opens.
 3. In the default **Copy Image** mode the screenshot is placed on your clipboard directly. In **Copy Link** mode it is uploaded and the public link is copied instead — double-tap the hotkey to toggle, or set the default in Settings.
 4. Click **Edit** to annotate before sharing.
@@ -111,7 +127,7 @@ Open **Settings** (from the tray) to configure the storage backend, hotkey, them
 - **Amazon S3** — enter Access Key ID, Secret Access Key, bucket, region, and folder in Settings → Storage. Public access is expected to be provided by your bucket policy (the app uploads without ACLs).
 - **Google Drive** — click *Connect to Google Drive* in Settings → Storage and authorize via OAuth2. Uploaded images are shared with a public link. Official release binaries ship with an embedded Google OAuth client, so you only need to log into your own Google account — no setup required.
 
-Settings are stored as JSON in `%APPDATA%\ClipToAll`, with sensitive fields encrypted at rest via Windows DPAPI. See [SECURITY.md](SECURITY.md) for the security model.
+On Windows, settings are stored as JSON in `%APPDATA%\ClipToAll`, with sensitive fields encrypted at rest via Windows DPAPI. On macOS they are stored in `~/Library/Application Support/ClipToAll` and secrets live in the Keychain. See [SECURITY.md](SECURITY.md) for the security model.
 
 > **Building Google Drive support from source:** the Google OAuth client is *not* committed to this repository. Official release builds inject it at compile time. If you build from source and want Google Drive to work, create your own [Google OAuth 2.0 "Desktop app" client](https://developers.google.com/identity/protocols/oauth2/native-app) and build with the credentials in the environment:
 >
@@ -123,7 +139,7 @@ Settings are stored as JSON in `%APPDATA%\ClipToAll`, with sensitive fields encr
 
 ## Roadmap
 
-- macOS support (ScreenCaptureKit capture, Keychain secrets, webview-based overlay, signing/notarization).
+- macOS: Intel / universal build, multi-display capture, plugin system.
 - Linux support (X11 first, then Wayland via xdg-desktop-portal).
 - Cross-platform overlay unification.
 
