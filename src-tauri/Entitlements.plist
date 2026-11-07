@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Sandbox entitlements for ClipToAll.
+	  Each key is required by code that exists in this repo; the comments
+	  point at the call site that justifies it.
+	-->
+
+	<!--
+	  Mandatory for the Mac App Store build (Guideline 2.5.2). Without this,
+	  App Store Connect rejects the binary at validation. Verify with
+	  `codesign -d` and its entitlements flag against the built .app; the
+	  output must show com.apple.security.app-sandbox = true.
+
+	  NOTE: never write two consecutive hyphens anywhere in a comment in this
+	  file. XML forbids them inside comments, and while `plutil -lint` accepts
+	  the file anyway, the parser codesign uses does not — the build fails with
+	  "AMFIUnserializeXML: syntax error". That is exactly how this line was
+	  originally written, and it cost a full release build to find.
+	-->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+
+	<!--
+	  Outbound HTTP/HTTPS to Drive (oauth2.googleapis.com, www.googleapis.com)
+	  and S3 (*.s3.amazonaws.com, plus customer endpoints). The Rust side uses
+	  reqwest for OAuth + S3 PUT and aws-sdk-s3 for S3 uploads; both are
+	  out-of-process sockets and require network.client under the sandbox.
+	  Call sites:
+	    - src-tauri/src/commands/upload_gdrive.rs  (OAuth + Drive API)
+	    - src-tauri/src/commands/upload_s3.rs      (aws-sdk-s3 PUT)
+	-->
+	<key>com.apple.security.network.client</key>
+	<true/>
+
+	<!--
+	  Inbound HTTP on a loopback port. The Google OAuth redirect URI is
+	  http://127.0.0.1:<random> and the Rust side binds it via
+	  `TcpListener::bind("127.0.0.1:0")` (src-tauri/src/commands/upload_gdrive.rs:336).
+	  Without network.server, the sandbox blocks the bind and Drive sign-in
+	  fails silently. This was the only entitlement the original plan §5
+	  missed; without it the App Store build's Google Drive button is dead.
+	-->
+	<key>com.apple.security.network.server</key>
+	<true/>
+
+	<!--
+	  Read/write to files the user explicitly chose via the Save panel.
+	  src-tauri/src/commands/capture.rs::save_image_to_path writes to the
+	  path returned by tauri-plugin-dialog's save() — the panel grants a
+	  one-shot power-of-attorney to that path under the sandbox, which
+	  user-selected.read-write is required to honour.
+	  Without this, "Save as file" errors out on every save.
+	-->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+</dict>
+</plist>

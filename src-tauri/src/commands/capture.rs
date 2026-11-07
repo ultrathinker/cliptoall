@@ -1,13 +1,22 @@
 use chrono::{Datelike, Timelike};
 use base64::Engine;
+#[cfg(windows)]
 use windows::Win32::Foundation::POINT;
+#[cfg(windows)]
 use windows::Win32::Graphics::Gdi::*;
+#[cfg(windows)]
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// Raw screenshot data kept in memory (no file I/O)
 pub struct CaptureData {
-    pub buffer: Vec<u8>,  // Raw BGRA pixels
+    /// Raw 4-bytes-per-pixel data in whichever order this platform's capture
+    /// backend natively produces: BGRA on Windows (GDI), RGBA on macOS
+    /// (ScreenCaptureKit via `sck_capture`, after drawing through an RGBA
+    /// bitmap context — see HANDOFF §4.1 / bug #14 on why we deliberately
+    /// keep the overlay's RGBA contract and avoid a second channel swap).
+    pub buffer: Vec<u8>,
     pub width: i32,
     pub height: i32,
     pub left: i32,
@@ -294,7 +303,48 @@ pub fn cleanup_temp_files() {
     }
 }
 
+/// Capture the primary monitor to memory via ScreenCaptureKit on macOS.
+/// Windows' `capture_to_memory` grabs the whole virtual screen (every
+/// monitor in one buffer, via `SM_CXVIRTUALSCREEN`); this captures only the
+/// PRIMARY monitor for now — proper multi-monitor compositing is a follow-up
+/// (PLAN.md Phase 2.1 flags evaluating multi-monitor before committing to an
+/// approach), so a selection dragged onto a second display will misbehave
+/// until then.
+///
+/// Replaces the previous `xcap`-backed implementation (`CGWindowListCreateImage`
+/// under the hood, deprecated since macOS 14). The "~270 ms" baseline was
+/// inherited from round-1 reporting; see the §0 caveat in HANDOFF.md §4
+/// for why that number is no longer trustworthy. Round-2 measured
+/// `capture_to_memory` lands at 79–100 ms end-to-end on this machine at
+/// the full 2560×1600 backing-store resolution (see `mx-sck-report.md` for
+/// the breakdown — the round-1 "~30–40 ms" claim quoted in earlier versions
+/// of this comment was measured at a quarter of the display's real
+/// resolution, bug #21, and does not reflect current code). The actual
+/// capture logic lives in `sck_capture` to keep `capture_to_memory`
+/// readable.
+#[cfg(target_os = "macos")]
+pub fn capture_to_memory() -> Result<CaptureData, String> {
+    use std::time::Instant;
+    let t0 = Instant::now();
+    crate::log(&format!("    [capture] capture_to_memory begin | +{}ms", t0.elapsed().as_millis()));
+    let result = crate::sck_capture::capture_via_sck(t0);
+    match &result {
+        Ok(_) => crate::log(&format!("    [capture] capture_to_memory done | +{}ms", t0.elapsed().as_millis())),
+        Err(e) => crate::log(&format!("    [capture] capture_to_memory FAILED: {} | +{}ms", e, t0.elapsed().as_millis())),
+    }
+    result
+}
+
+/// Linux: ScreenCaptureKit is not available, and the project has never
+/// supported Linux (see EXECUTION-PLAN §2). Build must still parse; runtime
+/// path returns an error so it can't accidentally succeed.
+#[cfg(target_os = "linux")]
+pub fn capture_to_memory() -> Result<CaptureData, String> {
+    Err("Screen capture is not implemented on Linux".to_string())
+}
+
 /// Capture the screen to memory (no file I/O). Used by native overlay.
+#[cfg(windows)]
 pub fn capture_to_memory() -> Result<CaptureData, String> {
     use std::time::Instant;
     let t0 = Instant::now();
@@ -385,7 +435,7 @@ pub fn capture_to_memory() -> Result<CaptureData, String> {
 /// different scale are handled correctly.
 pub fn crop_and_save_from_buffer(
     data: &CaptureData,
-    sel: &crate::overlay::SelectionRect,
+    sel: &crate::geometry::SelectionRect,
 ) -> Result<(String, f32), String> {
     let sw = data.width as usize;
     let sh = data.height as usize;
@@ -401,15 +451,28 @@ pub fn crop_and_save_from_buffer(
         return Err("Selection is outside the captured area".to_string());
     }
 
-    // Extract crop region and convert BGRA → RGB
+    // Extract crop region and drop the alpha channel. `data.buffer`'s pixel
+    // order is whatever this platform's capture backend natively produces —
+    // BGRA on Windows (GDI), RGBA on macOS (ScreenCaptureKit via
+    // `sck_capture`, drawn through an RGBA bitmap context so we never have
+    // to ship BGRA to the overlay). We deliberately avoid normalizing to
+    // one order at capture time and paying for a channel-swap pass over
+    // the whole screen on every single capture, only to (on macOS) undo
+    // that exact swap again for the web overlay's canvas, which wants RGBA
+    // anyway. See HANDOFF §4.1 / bug #14. This is the one place that needs
+    // to know which order it's reading.
+    #[cfg(windows)]
+    let (ri, gi, bi) = (2usize, 1usize, 0usize); // BGRA
+    #[cfg(not(windows))]
+    let (ri, gi, bi) = (0usize, 1usize, 2usize); // RGBA
     let mut rgb_buf = Vec::with_capacity(sel_w * sel_h * 3);
     for y in 0..sel_h {
         let src_y = (y0 + y) * sw * 4;
         for x in 0..sel_w {
             let offset = src_y + (x0 + x) * 4;
-            rgb_buf.push(data.buffer[offset + 2]); // R
-            rgb_buf.push(data.buffer[offset + 1]); // G
-            rgb_buf.push(data.buffer[offset]);     // B
+            rgb_buf.push(data.buffer[offset + ri]);
+            rgb_buf.push(data.buffer[offset + gi]);
+            rgb_buf.push(data.buffer[offset + bi]);
         }
     }
 
@@ -435,6 +498,7 @@ pub fn crop_and_save_from_buffer(
 }
 
 /// Effective DPI scale (1.0 = 96 dpi/100%) of the monitor containing a point.
+#[cfg(windows)]
 fn get_monitor_scale(x: i32, y: i32) -> f32 {
     unsafe {
         let hmon = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
@@ -446,6 +510,23 @@ fn get_monitor_scale(x: i32, y: i32) -> f32 {
             1.0
         }
     }
+}
+
+/// Retina `backingScaleFactor` (2.0 on Retina, 1.0 on non-Retina) of the
+/// monitor a captured point is on. `capture_to_memory` currently captures
+/// only the PRIMARY monitor (§ its own doc comment — multi-monitor capture
+/// is a follow-up), so every point this is ever called with is on that same
+/// monitor — just return its scale directly rather than hit-testing monitor
+/// bounds by point. (An earlier version did a physical-vs-logical bounds
+/// hit-test here; reconstructing physical bounds as `round(logical * scale)`
+/// isn't guaranteed to exactly match the real captured pixel dimensions on
+/// every display, e.g. a non-native "scaled resolution" mode, so a point at
+/// the very edge could match no monitor and silently fall back to 1.0. Once
+/// multi-monitor capture exists, resolve scale properly per-monitor instead
+/// of reintroducing that hit-test.)
+#[cfg(target_os = "macos")]
+fn get_monitor_scale(_x: i32, _y: i32) -> f32 {
+    crate::sck_capture::primary_monitor_scale()
 }
 
 /// Save the editor canvas (PNG base64) as a LOSSLESS PNG working copy. Keeping
@@ -477,8 +558,17 @@ pub fn save_image_base64(base64_data: String) -> Result<String, String> {
     Ok(output_path.to_string_lossy().to_string())
 }
 
+/// Placeholder until a native macOS save panel (`NSSavePanel` via a Tauri
+/// dialog plugin) lands.
+#[cfg(not(windows))]
+#[tauri::command]
+pub fn save_image_to_file(_source_path: String, _output_scale: f32) -> Result<Option<String>, String> {
+    Err("save_image_to_file not yet implemented on macOS".to_string())
+}
+
 /// Show a native Win32 Save File dialog and copy the image to the chosen path.
 /// Returns Some(path) if saved, None if user cancelled.
+#[cfg(windows)]
 #[tauri::command]
 pub fn save_image_to_file(source_path: String, output_scale: f32) -> Result<Option<String>, String> {
     use std::path::Path;
@@ -566,6 +656,57 @@ pub fn save_image_to_file(source_path: String, output_scale: f32) -> Result<Opti
     }
 
     Ok(Some(final_path))
+}
+
+/// Save the cropped screenshot to a caller-supplied destination path. macOS
+/// counterpart to the Win32-OFN-based `save_image_to_file`: the frontend
+/// resolves the destination via the tauri-plugin-dialog `save()` panel
+/// (`NSSavePanel`) and then invokes this command with the chosen path.
+///
+/// The encoding logic is deliberately duplicated from the Windows
+/// `save_image_to_file` rather than factored into a shared helper, because
+/// Phase 3 brief mandates "the Windows path must be byte-for-byte untouched".
+/// If you change one, change both — the two stay in lockstep by design.
+///
+/// Returns Some(path) on success. The frontend treats a null result from the
+/// save dialog as "user cancelled" and never invokes this command in that
+/// case, so None is reserved for the rare I/O failure during re-encoding.
+///
+/// Security: the FIRST thing this command does is `ensure_temp_screenshot_path`
+/// on the source. Without that check, a caller could point the command at any
+/// readable file (e.g. `/etc/passwd`) and have its bytes rewritten into the
+/// user-chosen destination — the same past security finding that forced the
+/// check into the Windows command (see comments there).
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn save_image_to_path(source_path: String, output_scale: f32, dest_path: String) -> Result<Option<String>, String> {
+    use std::path::Path;
+
+    ensure_temp_screenshot_path(&source_path)?;
+
+    let final_path = Path::new(&dest_path).to_path_buf();
+    let dest_ext = final_path.extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+
+    // Transcode to the chosen format (source is a lossless PNG working copy,
+    // so JPEG is encoded exactly once here rather than copied byte-for-byte).
+    // Honor "resize shared images to logical size" for saved files too, so
+    // all output paths (upload / clipboard / save-as) behave consistently.
+    // Users who want full-resolution archival saves simply leave that
+    // setting off.
+    let rgb = apply_output_downscale(image::open(&source_path).map_err(|e| e.to_string())?.to_rgb8(), output_scale);
+    if dest_ext == "png" {
+        // EXIF density is ignored by browsers for PNG, so PNG save is just full-res.
+        rgb.save_with_format(&final_path, image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    } else {
+        save_jpeg(&rgb, &final_path, output_jpeg_quality())?;
+        if output_mode() == "exif" && output_scale > 1.05 {
+            write_exif_density(&final_path, rgb.width(), rgb.height(), output_scale);
+        }
+    }
+
+    Ok(Some(final_path.to_string_lossy().to_string()))
 }
 
 #[cfg(test)]

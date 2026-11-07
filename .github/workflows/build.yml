@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [main]
+    branches: [main, macos-port]
   pull_request:
     branches: [main]
 
@@ -11,12 +11,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Windows is the currently supported platform. macOS/Linux are on the
-        # roadmap — add them here once the platform backends exist:
-        #   - { os: macos-latest,  target: universal-apple-darwin }
+        # Linux is still on the roadmap — add it here once the platform backend
+        # exists:
         #   - { os: ubuntu-22.04,  target: x86_64-unknown-linux-gnu }
         include:
           - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: macos-latest,   target: aarch64-apple-darwin }
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -56,8 +56,9 @@ jobs:
 
       # Build the standalone plugin crates (separate Cargo workspaces, each with
       # its own Cargo.toml under plugins/<crate>/). `aumid-plugin` uses windows-rs
-      # and only compiles on Windows, which matches the matrix above.
+      # and only compiles on Windows, hence the guard.
       - name: Build plugin crates
+        if: matrix.os == 'windows-latest'
         run: |
           cargo build --manifest-path plugins/plugin-template/Cargo.toml
           cargo build --manifest-path plugins/encryption-plugin/Cargo.toml

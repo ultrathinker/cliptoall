@@ -59,9 +59,16 @@ pub struct AppSettings {
 }
 
 fn default_results_width() -> f64 { 850.0 }
-fn default_results_height() -> f64 { 190.0 }
+fn default_results_height() -> f64 { crate::RESULTS_MIN_HEIGHT }
 fn default_true() -> bool { true }
+#[cfg(windows)]
 fn default_capture_hotkey() -> String { "Alt+X".to_string() }
+// Cmd+X is Cut on every macOS app, and a registered global hotkey takes the
+// combination away from all of them — so it cannot be the default here. Ctrl+Cmd
+// keeps the "X" mnemonic shared with the Windows Alt+X and is not claimed by the
+// system or by common apps.
+#[cfg(not(windows))]
+fn default_capture_hotkey() -> String { "Ctrl+Cmd+X".to_string() }
 fn default_mode_image() -> String { "image".to_string() }
 fn default_jpeg_quality() -> u8 { 85 }
 /// Empty sentinel: an absent output_mode is migrated from downscale_for_dpi on load.
@@ -75,7 +82,10 @@ fn validate_settings(s: &mut AppSettings) {
     // Window size: keep within something a real monitor could show. NaN/inf
     // collapse to the default via the finite check.
     s.results_width = if s.results_width.is_finite() { s.results_width.clamp(200.0, 20000.0) } else { default_results_width() };
-    s.results_height = if s.results_height.is_finite() { s.results_height.clamp(100.0, 20000.0) } else { default_results_height() };
+    // Lower bound matches RESULTS_MIN_HEIGHT (main.rs) — below that, the
+    // window's own min_inner_size clamps it anyway, but a stored value that
+    // doesn't match what actually renders is confusing to debug later.
+    s.results_height = if s.results_height.is_finite() { s.results_height.clamp(crate::RESULTS_MIN_HEIGHT, 20000.0) } else { default_results_height() };
     // JPEG quality is 1..=100 (0 or >100 are meaningless to the encoder).
     s.jpeg_quality = s.jpeg_quality.clamp(1, 100);
     // Enum whitelists — must match the frontend option sets exactly.
@@ -137,6 +147,17 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             image_prefix: "cta_".to_string(),
+            // On macOS, defaulting autorun to true installs a LaunchAgent on
+            // first launch without the user ever asking — both a 2.1 impression
+            // for the App Store ("the app does things the user did not request")
+            // and the wrong default in general: login items should be opt-in.
+            // Windows keeps its historical `true`: that platform's auto-start
+            // registry entry is the convention the existing settings file
+            // already assumes, and changing the default there would silently
+            // turn off autorun for everyone who never visited the Settings page.
+            #[cfg(target_os = "macos")]
+            autorun: false,
+            #[cfg(not(target_os = "macos"))]
             autorun: true,
             autoclose: true,
             amazon_access_key_id: String::new(),
@@ -147,13 +168,32 @@ impl Default for AppSettings {
             logging_on: false,
             storage_type: "gdrive".to_string(),
             google_drive_folder: "public-images".to_string(),
+            // Default output handling differs by platform, because the same
+            // "resize" rule costs very different amounts of detail.
+            //
+            // Windows DPI scaling is typically 125-150%, so resizing a capture
+            // down to logical size discards relatively little. macOS Retina is a
+            // flat 2x: resizing throws away three quarters of the pixels, and
+            // text in a shared screenshot comes out visibly soft. "exif" keeps
+            // every pixel and instead tags the JPEG's density, so browsers still
+            // display it at logical size (per the 2021 WHATWG density
+            // correction) while zoom and Retina viewers get the full detail.
+            //
+            // Only the default differs — all three modes remain selectable on
+            // both platforms, and an existing settings file is untouched.
+            #[cfg(target_os = "macos")]
+            downscale_for_dpi: false,
+            #[cfg(not(target_os = "macos"))]
             downscale_for_dpi: true,
+            #[cfg(target_os = "macos")]
+            output_mode: "exif".to_string(),
+            #[cfg(not(target_os = "macos"))]
             output_mode: "resize".to_string(),
             theme: "crimson".to_string(),
             results_width: 850.0,
-            results_height: 190.0,
+            results_height: crate::RESULTS_MIN_HEIGHT,
             skip_upload_in_copy_mode: true,
-            capture_hotkey: "Alt+X".to_string(),
+            capture_hotkey: default_capture_hotkey(),
             escape_hides_results: true,
             default_mode: "image".to_string(),
             jpeg_quality: 85,
@@ -206,6 +246,16 @@ fn read_settings_from_disk() -> AppSettings {
                 // downscale_for_dpi boolean: false → "off", true → "resize".
                 if s.output_mode.trim().is_empty() {
                     s.output_mode = if s.downscale_for_dpi { "resize" } else { "off" }.to_string();
+                }
+                // Migrate away from the earlier macOS default: Cmd+X is the
+                // system Cut shortcut, and registering it globally breaks Cut in
+                // every application. A default change alone would not reach the
+                // users who already have it written to disk.
+                #[cfg(not(windows))]
+                if s.capture_hotkey.eq_ignore_ascii_case("Cmd+X")
+                    || s.capture_hotkey.eq_ignore_ascii_case("Command+X")
+                {
+                    s.capture_hotkey = default_capture_hotkey();
                 }
                 return s;
             }
@@ -309,17 +359,19 @@ fn save_settings_to_disk_locked(settings: AppSettings) -> Result<(), String> {
     crate::LOGGING_ON.store(settings.logging_on, Ordering::Relaxed);
     crate::DEFAULT_MODE_IS_IMAGE.store(settings.default_mode == "image", Ordering::Relaxed);
 
-    // Update Windows autorun registry entry
+    // Apply the autostart setting: registry entry on Windows, SMAppService on
+    // macOS. Failure is logged, not propagated — a settings save should not fail
+    // because the OS refused a login item.
     if let Err(e) = crate::utils::autorun::set_autorun(settings.autorun) {
-        crate::log(&format!("Autorun registry update failed: {}", e));
+        crate::log(&format!("Autorun update failed: {}", e));
     }
 
     // Encrypt sensitive fields before writing to disk (keep `settings` plaintext
     // for the cache).
     let mut to_save = settings.clone();
-    to_save.amazon_access_key_id = crate::utils::dpapi::encrypt_field(&to_save.amazon_access_key_id)
+    to_save.amazon_access_key_id = crate::utils::dpapi::encrypt_field("amazon_access_key_id", &to_save.amazon_access_key_id)
         .map_err(|e| format!("Failed to encrypt Amazon access key: {}", e))?;
-    to_save.amazon_secret_access_key = crate::utils::dpapi::encrypt_field(&to_save.amazon_secret_access_key)
+    to_save.amazon_secret_access_key = crate::utils::dpapi::encrypt_field("amazon_secret_access_key", &to_save.amazon_secret_access_key)
         .map_err(|e| format!("Failed to encrypt Amazon secret key: {}", e))?;
 
     let path = get_settings_path();

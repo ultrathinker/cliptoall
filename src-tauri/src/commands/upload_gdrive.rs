@@ -200,7 +200,7 @@ fn save_token_to_disk(token: &SavedToken) -> Result<(), String> {
     let path = get_token_path();
     let json = serde_json::to_string_pretty(token)
         .map_err(|e| format!("Failed to serialize gdrive token: {}", e))?;
-    let encrypted = crate::utils::dpapi::dpapi_encrypt(&json)
+    let encrypted = crate::utils::dpapi::dpapi_encrypt("gdrive_token", &json)
         .map_err(|e| format!("Failed to encrypt gdrive token: {}", e))?;
     // Atomic write so a crash mid-write can't corrupt the stored token (which
     // would force a reconnect) — see utils::fs::atomic_write.
@@ -248,7 +248,7 @@ pub async fn get_valid_token() -> Result<String, String> {
     ensure_loaded();
 
     let token = GDRIVE_TOKEN.lock().clone()
-        .ok_or("Not authorized. Please connect to Google Drive.")?;
+        .ok_or("Not authorized.")?;
 
     // Fast path: still valid with >60s of headroom.
     if now_secs() + 60 < token.expires_at {
@@ -261,7 +261,7 @@ pub async fn get_valid_token() -> Result<String, String> {
 
     // Re-check under the gate: another task may have refreshed while we waited.
     let token = GDRIVE_TOKEN.lock().clone()
-        .ok_or("Not authorized. Please connect to Google Drive.")?;
+        .ok_or("Not authorized.")?;
     if now_secs() + 60 < token.expires_at {
         return Ok(token.access_token);
     }
@@ -682,7 +682,22 @@ pub async fn gdrive_upload_pooled(
                     }
                 }
             }
-            if !patched {
+            if patched {
+                // The link has been usable since the moment it was claimed, but
+                // until now it served the blank placeholder. Tell the window the
+                // bytes are actually there, so actions that FETCH the url —
+                // "Show", and the reverse-image searches, which hand the link to
+                // a third party that downloads it once and caches the result —
+                // can stop waiting. Copying the link was never gated: handing
+                // someone a link they'll open seconds later is exactly what the
+                // pool is for.
+                use tauri::Emitter;
+                let _ = window_clone.emit_to(
+                    win_label.as_str(),
+                    "gdrive-content-ready",
+                    serde_json::json!({ "callId": call_id }),
+                );
+            } else {
                 match gdrive_upload_cached(&pool_fallback, image_path_clone, folder_clone).await {
                     Ok(new_url) => {
                         crate::log(&format!("[gdrive_pool] placeholder unfillable, fell back to direct upload: {}", new_url));

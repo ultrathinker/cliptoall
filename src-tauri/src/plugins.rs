@@ -49,7 +49,12 @@ pub struct PluginResult {
     pub status: String,
     #[serde(default)]
     pub message: Option<String>,
+    // Read only on Windows (see main.rs's admin-required dispatch), so the
+    // macOS build marks the field dead. Keep the field rather than delete
+    // it: plugins running on Windows may still emit it, and removing the
+    // deserialized field would silently drop the value rather than ignore it.
     #[serde(default)]
+    #[allow(dead_code)]
     pub action: Option<String>,
 }
 
@@ -201,7 +206,24 @@ impl PluginManager {
         Some(dir)
     }
 
-    /// Find plugin exe files in the plugins/ subfolder.
+    /// Windows: a plugin is any `.exe` file.
+    #[cfg(windows)]
+    fn is_plugin_executable(path: &std::path::Path) -> bool {
+        path.extension().and_then(|e| e.to_str()) == Some("exe")
+    }
+
+    /// macOS/Unix: no `.exe` convention, so a plugin is any file with the
+    /// executable bit set (PLAN.md Phase 1.4).
+    #[cfg(not(windows))]
+    fn is_plugin_executable(path: &std::path::Path) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        path.is_file()
+            && std::fs::metadata(path)
+                .map(|m| m.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false)
+    }
+
+    /// Find plugin executables in the plugins/ subfolder.
     pub fn discover_exe_files() -> Vec<PathBuf> {
         let plugins_dir = match Self::plugins_dir() {
             Some(d) => d,
@@ -214,7 +236,7 @@ impl PluginManager {
         if let Ok(entries) = std::fs::read_dir(&plugins_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("exe") {
+                if !Self::is_plugin_executable(&path) {
                     continue;
                 }
                 let name = path.file_name()

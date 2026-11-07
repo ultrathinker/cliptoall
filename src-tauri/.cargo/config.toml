@@ -1,0 +1,6 @@
+# Re-sign every macOS dev build with a stable identity before running it —
+# see scripts/macos-dev-runner.sh for why (Keychain access-prompt fatigue
+# during dev iteration). Windows/Linux builds are untouched; this only
+# matches macOS as a `cargo run`/`cargo test` target.
+[target.'cfg(target_os = "macos")']
+runner = "scripts/macos-dev-runner.sh"

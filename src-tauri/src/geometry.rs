@@ -1,0 +1,28 @@
+//! Platform-agnostic geometry types shared between the capture pipeline and
+//! whichever overlay produced the selection (native Win32 overlay on Windows,
+//! the web overlay on macOS — see docs/macos-port/PLAN.md Phase 3).
+
+#[derive(Clone, Copy, Debug)]
+pub struct SelectionRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+/// What an overlay (native or web) resolved to: a region selection, a plugin
+/// hotkey pressed while the overlay was up, or (via `None` at the call site)
+/// a cancel. Shared so `main.rs`'s post-selection handling (crop/save/
+/// clipboard/results-window/plugin dispatch) is identical on every platform.
+///
+/// `PluginCall` is constructed only when the `plugins` Cargo feature is on
+/// (see the `#[cfg]` on `handle_overlay_result`'s arm in main.rs), so silence
+/// the dead-code lint on the no-plugins build: the variant stays regardless
+/// because removing it would force `handle_overlay_result` to diverge between
+/// the two configurations.
+#[derive(Debug)]
+pub enum OverlayResult {
+    Selection(SelectionRect),
+    #[allow(dead_code)]
+    PluginCall { path: String, function_id: String },
+}

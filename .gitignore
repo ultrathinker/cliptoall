@@ -41,3 +41,4 @@ build-now.bat
 tauri-build-out.log
 .env
 .env.*
+dist-macos/

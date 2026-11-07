@@ -1,0 +1,7 @@
+{
+  "$schema": "gen/schemas/macOS-schema.json",
+  "bundle": {
+    "targets": ["app", "dmg"],
+    "icon": ["icons/icon.icns", "icons/icon.png"]
+  }
+}

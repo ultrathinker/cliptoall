@@ -7,6 +7,8 @@
   } from '../lib/api';
   import type { DiscoveredPlugin, PluginConfig } from '../lib/plugin-types';
   import { pythonTemplate, csharpTemplate, powershellTemplate, getAiInstructions } from '../lib/plugin-templates';
+  import { showAlert } from '../lib/stores/alert.svelte';
+  import { IS_MAC } from '../lib/platform';
   import '../lib/settings-plugins.css';
 
   // The three fields the parent's handleSave needs are $bindable so they survive
@@ -92,8 +94,12 @@
       pluginConfigs = configs;
       pluginsScanned = true;
 
-      // Check runtimes if any script plugins discovered
-      if (discovered.some(p => p.plugin_type === 'python' || p.plugin_type === 'csharp' || p.plugin_type === 'powershell')) {
+      // Check runtimes if any script plugins discovered. PowerShell is hidden
+      // on macOS so we don't probe it there (matches the dropdown gating).
+      const needsRuntimeCheck = IS_MAC
+        ? discovered.some(p => p.plugin_type === 'python' || p.plugin_type === 'csharp')
+        : discovered.some(p => p.plugin_type === 'python' || p.plugin_type === 'csharp' || p.plugin_type === 'powershell');
+      if (needsRuntimeCheck) {
         checkRuntimes();
       }
     } catch (e) {
@@ -273,7 +279,7 @@
       scriptEditorPath = plugin.path;
       scriptEditorOpen = true;
     } catch (e) {
-      alert('Failed to read script: ' + e);
+      showAlert('Failed to read script: ' + e);
     }
   }
 
@@ -327,7 +333,7 @@
     try {
       await runScriptInTerminal(plugin.path);
     } catch (e) {
-      alert('Failed to open PowerShell: ' + e);
+      showAlert('Failed to open PowerShell: ' + e);
     }
   }
 
@@ -339,7 +345,7 @@
       pluginConfigs = pluginConfigs.filter(c => c.path !== plugin.path);
       await scanPlugins();
     } catch (e) {
-      alert('Failed to delete: ' + e);
+      showAlert('Failed to delete: ' + e);
     }
   }
 
@@ -348,7 +354,15 @@
   }
 
   async function checkRuntimes() {
-    for (const lang of ['python', 'csharp', 'powershell'] as const) {
+    // PowerShell is hidden on macOS — see the dropdown gating above. Don't
+    // even probe for it: `checkRuntime('powershell')` would invoke
+    // `powershell_path()`, which on non-Windows returns a bare "powershell"
+    // that the OS can't find, so the probe always fails with an unenlightening
+    // error and the user sees a runtime warning that doesn't apply.
+    const langs = IS_MAC
+      ? (['python', 'csharp'] as const)
+      : (['python', 'csharp', 'powershell'] as const);
+    for (const lang of langs) {
       try {
         const version = await checkRuntime(lang);
         runtimeStatus = { ...runtimeStatus, [lang]: { available: true, version } };
@@ -394,7 +408,16 @@
       </select>
       <input class="plugins-search" type="text" placeholder="Search plugins..." bind:value={pluginSearch} />
     </div>
-    <p class="plugins-hint">Place plugins in the <code>plugins/</code> folder next to ClipToAll.exe</p>
+    <!-- plugins_dir() in plugins.rs resolves to <exe dir>/plugins, which on
+         macOS is inside the .app bundle — "next to ClipToAll.exe" is wrong
+         there in both wording and location. -->
+    <p class="plugins-hint">
+      {#if IS_MAC}
+        Place plugins in the <code>plugins/</code> folder inside the app bundle (<code>ClipToAll.app/Contents/MacOS/plugins/</code>)
+      {:else}
+        Place plugins in the <code>plugins/</code> folder next to ClipToAll.exe
+      {/if}
+    </p>
   </div>
 
   {#if pluginsLoading}
@@ -615,7 +638,9 @@
               >
                 <option value="python">Python</option>
                 <option value="csharp">C# (.NET)</option>
-                <option value="powershell">PowerShell</option>
+                {#if !IS_MAC}
+                  <option value="powershell">PowerShell</option>
+                {/if}
               </select>
               {#if runtimeStatus[scriptEditorLanguage]}
                 {#if runtimeStatus[scriptEditorLanguage].available}

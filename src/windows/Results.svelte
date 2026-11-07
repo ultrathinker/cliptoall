@@ -1,11 +1,12 @@
 <script lang="ts">
   import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
   import { openUrl } from '@tauri-apps/plugin-opener';
-  import { saveResultsWindowSize, readImageBase64, copyImageToClipboard } from '../lib/api';
+  import { saveResultsWindowSize, readImageBase64, copyImageToClipboard, recognizeText, openSettingsTab } from '../lib/api';
   import { writeText } from '@tauri-apps/plugin-clipboard-manager';
   import { settings } from '../lib/stores/settings';
   import { session, startUpload, copyLink, currentImagePath } from '../lib/stores/session.svelte';
-  import { onMount, onDestroy } from 'svelte';
+  import { displayHotkey, IS_MAC } from '../lib/platform';
+  import { onMount, onDestroy, tick } from 'svelte';
 
   let { onEdit }: { onEdit?: () => void } = $props();
 
@@ -18,20 +19,48 @@
   let previewDataUrl = $state('');
   let mounted = true;
   let resizeSaveTimer: number | undefined;
+  let containerEl: HTMLDivElement;
+  let cardEl: HTMLDivElement;
+  let contentObserver: ResizeObserver | undefined;
+  /// Width floor is genuinely fixed (the button column + preview box are
+  /// fixed-width); the HEIGHT floor starts at the Rust-side value and is
+  /// then raised to whatever the content measures — see ensureContentFits.
+  const MIN_WIDTH = 620;
+  let minHeight = 210;
   let unlistenResize: (() => void) | undefined;
   let showErrorPopup = $state(false);
   let copyLinkLabel = $state('Copy link');
   let copyImageLabel = $state('Copy image');
+  /// On-device OCR — macOS only. The Rust side invokes Vision's
+  /// VNRecognizeTextRequest off-thread; we track the in-flight state here so
+  /// the button can show its spinner. Three terminal states map to three
+  /// short confirmation strings the user can read in-place, matching how
+  /// "Copy link" already handles success/failure (mx-ocr brief §Frontend).
+  let copyTextLabel = $state('Copy text');
+  let copyTextRunning = $state(false);
+  let copyTextResetTimer: number | undefined;
 
   // ── Derived view state (single source of truth = session store) ──────
   let uploading = $derived(session.status === 'uploading');
   let hasUrl = $derived(!!session.url);
   // The link is directly usable only when it matches the current image.
   let linkUsable = $derived(session.status === 'done' && !session.stale);
+  // Stricter than `linkUsable`: for actions that FETCH the url, the link being
+  // valid is not enough — the bytes behind it must have landed. Between claiming
+  // a GDrive pool placeholder and its background PATCH, the url resolves to a
+  // blank ~600-byte placeholder, so opening it then shows a 1x1 image rather
+  // than the screenshot. Copying the link stays on `linkUsable`: handing someone
+  // a link they will open seconds later is precisely what the pool exists for.
+  let linkFetchable = $derived(linkUsable && !session.contentPending);
   let uploadError = $derived(session.status === 'error' ? session.error : '');
 
   const ERROR_MAX = 150;
   let shortError = $derived(uploadError.length > ERROR_MAX ? uploadError.slice(0, ERROR_MAX) + '...' : uploadError);
+  // Matches the message raised by upload_gdrive.rs when there is no stored
+  // token ("Not authorized. Please connect to Google Drive."). Matching on text
+  // is fragile, so keep it loose — a missed match costs the shortcut, not
+  // correctness, and the full error is still shown either way.
+  let needsGoogleAuth = $derived(/not authorized/i.test(uploadError));
 
   // Primary action button (label + whether it re-uploads or just copies).
   let primaryLabel = $derived(
@@ -71,7 +100,8 @@
     window.addEventListener('keydown', handleKeydown);
 
     const win = getCurrentWindow();
-    await win.setMinSize(new LogicalSize(600, 200));
+    // Height floor is MEASURED, not hardcoded — see ensureContentFits.
+    await win.setMinSize(new LogicalSize(MIN_WIDTH, minHeight));
 
     // Save window size on resize (debounced), skip if minimized
     unlistenResize = await win.onResized(async ({ payload: size }) => {
@@ -83,10 +113,23 @@
         const factor = await win.scaleFactor();
         const logicalW = size.width / factor;
         const logicalH = size.height / factor;
-        if (logicalW < 300 || logicalH < 100) return;
+        // Never persist a size below the measured floor.
+        if (logicalW < MIN_WIDTH || logicalH < minHeight) return;
         await saveResultsWindowSize(logicalW, logicalH);
       }, 500);
     });
+
+    // Measure as soon as Svelte has rendered. Deliberately NOT inside
+    // requestAnimationFrame: this component mounts while the window is still
+    // hidden, and rAF is suspended for hidden windows (see waitForPaint in
+    // App.svelte) — the callback would never run. Reading scrollHeight
+    // forces a synchronous layout, which IS computed while hidden, so the
+    // measurement is valid here. The observer then catches later changes
+    // (status line wrapping to a second line, the error "more" link, ...).
+    await tick();
+    await ensureContentFits();
+    contentObserver = new ResizeObserver(() => { ensureContentFits(); });
+    if (cardEl) contentObserver.observe(cardEl);
 
     // Load preview thumbnail of the current (possibly edited) image.
     const path = currentImagePath();
@@ -106,7 +149,9 @@
     mounted = false;
     if (intervalId) clearInterval(intervalId);
     if (resizeSaveTimer) clearTimeout(resizeSaveTimer);
+    if (copyTextResetTimer) clearTimeout(copyTextResetTimer);
     if (unlistenResize) unlistenResize();
+    contentObserver?.disconnect();
     window.removeEventListener('keydown', handleKeydown);
   });
 
@@ -167,6 +212,48 @@
     }
   }
 
+  /// On-device OCR (macOS only). Reads recognised text off the current
+  /// capture via `recognize_text` (Apple Vision under the hood), then puts
+  /// the result on the clipboard. Empty result is treated as "no text
+  /// found" and surfaced in-place rather than overwriting the clipboard
+  /// with a stray empty string — the brief is explicit about this.
+  async function copyText() {
+    if (copyTextRunning) return; // ignore re-entry while recognition is in flight
+    const path = currentImagePath();
+    if (!path) return;
+    copyTextRunning = true;
+    copyTextLabel = 'Reading text…';
+    try {
+      const text = await recognizeText(path);
+      if (!mounted) return;
+      if (text.length === 0) {
+        // Normal outcome for screenshots that contain no copyable text.
+        // Don't copy — that would clobber the user's clipboard with
+        // nothing — and say so plainly for ~2 seconds so the user can
+        // tell what happened without checking the console.
+        copyTextLabel = 'No text found';
+        scheduleCopyTextReset('Copy text', 2000);
+        return;
+      }
+      await writeText(text);
+      if (!mounted) return;
+      copyTextLabel = 'Copied';
+      scheduleCopyTextReset('Copy text', 1500);
+    } catch (e) {
+      console.error('Copy text failed:', e);
+      if (!mounted) return;
+      copyTextLabel = 'Copy failed';
+      scheduleCopyTextReset('Copy text', 1500);
+    } finally {
+      copyTextRunning = false;
+    }
+  }
+
+  function scheduleCopyTextReset(label: string, ms: number) {
+    if (copyTextResetTimer) clearTimeout(copyTextResetTimer);
+    copyTextResetTimer = setTimeout(() => { copyTextLabel = label; }, ms);
+  }
+
   async function openInBrowser() {
     if (session.url) await openUrl(session.url);
   }
@@ -177,11 +264,6 @@
 
   async function searchTineye() {
     if (session.url) await openUrl(`https://tineye.com/search?url=${encodeURIComponent(session.url)}`);
-  }
-
-  async function searchEverywhere() {
-    await searchGoogle();
-    await searchTineye();
   }
 
   function toggleAutoclose() {
@@ -199,20 +281,74 @@
     stopAutoclose();
     if (onEdit) onEdit();
   }
+
+  /// Grow the window (and raise its min size) until the card's content
+  /// actually fits.
+  ///
+  /// WHY MEASURED, NOT A CONSTANT: every previous attempt at this was a
+  /// hardcoded floor (600x200, then 620x210) derived by adding up CSS
+  /// pixel values by hand — and each one was still slightly too small, so
+  /// the bottom-most action button stayed clipped by
+  /// `.results-container`'s `overflow: hidden`. The real content height
+  /// depends on things a hand-count can't know: the platform's checkbox
+  /// and font metrics, whether the status line wraps to a second line,
+  /// whether the "more" error link is present. So instead of guessing the
+  /// number, ask the DOM what it actually is: `scrollHeight -
+  /// clientHeight` on the clipping container IS, by definition, exactly
+  /// how many pixels are being cut off. Add that to the current height and
+  /// the content fits — whatever the cause, on any platform, at any font
+  /// size. Self-correcting: it re-runs on resize/content change and
+  /// converges (once nothing overflows, overflow is 0 and it no-ops).
+  async function ensureContentFits() {
+    if (!containerEl || !cardEl) return;
+    const overflow = Math.max(
+      containerEl.scrollHeight - containerEl.clientHeight,
+      cardEl.scrollHeight - cardEl.clientHeight,
+    );
+    if (overflow <= 0) return;
+
+    const win = getCurrentWindow();
+    const factor = await win.scaleFactor();
+    const size = await win.innerSize(); // physical px
+    const curH = size.height / factor;
+    const curW = size.width / factor;
+    const needed = Math.ceil(curH + overflow);
+    if (needed <= minHeight) return; // already accounted for
+
+    minHeight = needed;
+    await win.setMinSize(new LogicalSize(MIN_WIDTH, minHeight));
+    if (curH < minHeight) {
+      await win.setSize(new LogicalSize(Math.max(curW, MIN_WIDTH), minHeight));
+    }
+  }
 </script>
 
-<div class="results-container">
-  <div class="results-card">
+<div class="results-container" bind:this={containerEl}>
+  <div class="results-card" bind:this={cardEl}>
     <div class="top-area">
       <!-- Left: URL + preview + status + search -->
       <div class="left-col">
-        <input
-          type="text"
-          value={session.url}
-          readonly
-          placeholder={uploading ? '' : session.status === 'skipped' ? 'Press Upload to get a link' : 'URL will appear here...'}
-          class="url-input"
-        />
+        {#if !session.url && session.status !== 'uploading'}
+          <!-- Actionable: no link yet and not in flight. Clicking runs the same
+               primary action as the button on the right (upload / retry / update).
+               The field is a real <button> so keyboard activation works for free
+               and screen readers announce it as interactive. -->
+          <button
+            type="button"
+            class="url-input actionable"
+            onclick={primaryAction}
+          >Click here or press Upload</button>
+        {:else}
+          <!-- Read-only view: a link is present (or an upload is in flight, so we
+               freeze the field). User can select text to copy. Click does nothing. -->
+          <input
+            type="text"
+            value={session.url}
+            readonly
+            placeholder={uploading ? '' : 'URL will appear here...'}
+            class="url-input"
+          />
+        {/if}
         <div class="preview-row">
           <div class="preview-box">
             {#if previewDataUrl}
@@ -228,7 +364,12 @@
                 <span class="status-icon error">&#x2716;</span>
                 <span class="status-text error-text">
                   {shortError}
-                  {#if uploadError.length > ERROR_MAX}
+                  {#if needsGoogleAuth}
+                    <!-- An unauthorized upload is the one error the user can
+                         actually fix, and the fix is three clicks away in a
+                         window they have to know exists. Take them there. -->
+                    <button type="button" class="more-link" onclick={() => openSettingsTab('storage')}>Connect Google Drive</button>
+                  {:else if uploadError.length > ERROR_MAX}
                     <button type="button" class="more-link" onclick={() => showErrorPopup = true}>more</button>
                   {/if}
                 </span>
@@ -247,15 +388,31 @@
               {/if}
             </div>
             <div class="search-buttons">
-              <button class="btn-default" disabled={!linkUsable} onclick={searchGoogle}>Google</button>
-              <button class="btn-default" disabled={!linkUsable} onclick={searchTineye}>Tineye</button>
-              <button class="btn-default" disabled={!linkUsable} onclick={searchEverywhere}>Search both</button>
+              <button class="btn-default" disabled={!linkFetchable} onclick={searchGoogle}>Google</button>
+              <button class="btn-default" disabled={!linkFetchable} onclick={searchTineye}>Tineye</button>
+              {#if IS_MAC}
+                <!-- macOS-only: on-device OCR via Apple's Vision framework (see
+                     src-tauri/src/commands/ocr.rs). Sits where "Search both"
+                     used to: that button only did what the two beside it
+                     already do. Unlike them it needs no uploaded link — the
+                     recognition runs on the local capture — so it is not
+                     gated on `linkFetchable`. The .spinner is the same one
+                     Show uses while the GDrive pool's background PATCH lands. -->
+                <button
+                  class="btn-default"
+                  disabled={copyTextRunning}
+                  onclick={copyText}
+                  title="Read the text in this image with on-device OCR and put it on the clipboard"
+                >
+                  {#if copyTextRunning}<span class="spinner" aria-hidden="true"></span>{/if}{copyTextLabel}
+                </button>
+              {/if}
             </div>
             <label class="autoclose-label">
               <input type="checkbox" checked={autoCloseEnabled} onchange={toggleAutoclose} />
               <span>{autoCloseRunning ? `Autoclose in ${autoCloseSeconds} seconds` : 'Autoclose'}</span>
             </label>
-            <span class="hint-text">{$settings.captureHotkey} = {$settings.defaultMode === 'image' ? 'Image' : 'Link'}, &nbsp; ({$settings.captureHotkey}) x2 = {$settings.defaultMode === 'image' ? 'Link' : 'Image'}</span>
+            <span class="hint-text">{displayHotkey($settings.captureHotkey)} = {$settings.defaultMode === 'image' ? 'Image' : 'Link'}, &nbsp; ({displayHotkey($settings.captureHotkey)}) x2 = {$settings.defaultMode === 'image' ? 'Link' : 'Image'}</span>
           </div>
         </div>
       </div>
@@ -264,7 +421,14 @@
       <div class="right-col">
         <button class="btn-accent btn-action" disabled={primaryDisabled} onclick={primaryAction}>{primaryLabel}</button>
         <button class="btn-accent btn-action" onclick={copyImage}>{copyImageLabel}</button>
-        <button class="btn-default btn-action" disabled={!linkUsable} onclick={openInBrowser}>Show</button>
+        <button
+          class="btn-default btn-action"
+          disabled={!linkFetchable}
+          title={session.contentPending ? 'Waiting for the image to finish landing on the server' : ''}
+          onclick={openInBrowser}
+        >
+          {#if session.contentPending && linkUsable}<span class="spinner" aria-hidden="true"></span>{/if}Show
+        </button>
         <button class="btn-default btn-action" onclick={handleEdit}>Edit</button>
       </div>
     </div>
@@ -336,6 +500,40 @@
     font-size: 10.5pt;
     height: 30px;
     box-sizing: border-box;
+    text-align: left;
+    /* Override button defaults so the button version looks identical to the
+       input version. appearance:none strips the macOS / Windows native button
+       chrome so the border/padding we set above is the only chrome. */
+    appearance: none;
+    -webkit-appearance: none;
+  }
+
+  /* Shown inside "Show" while the GDrive pool's background PATCH is still
+     writing the real bytes behind an already-shared link. */
+  .spinner {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 6px;
+    vertical-align: -1px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    opacity: 0.7;
+    animation: spin 0.7s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .url-input.actionable {
+    /* Hint that the field is clickable. The default I-beam on the input
+       version is the right cursor for selecting text; the button version
+       needs a pointer to advertise its primary action. */
+    cursor: pointer;
+    /* Prevent the placeholder text from being accidentally selected on click. */
+    user-select: none;
   }
 
   .url-input:focus {

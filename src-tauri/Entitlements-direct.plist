@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Direct-distribution (Developer ID + notarization) build, NOT sandboxed.
+	  The hardened runtime is enabled by the signing step; this app needs no
+	  hardened-runtime exceptions: the WebKit web content runs in Apple's own
+	  helper processes, there is no JIT or unsigned code in our process, and
+	  screen capture is gated by the TCC Screen Recording prompt, not by an
+	  entitlement. Keep App Store builds on Entitlements.plist (sandboxed).
+	-->
+</dict>
+</plist>

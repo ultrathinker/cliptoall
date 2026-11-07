@@ -40,6 +40,12 @@ export const readImageBase64 = (path: string) => invoke<string>('read_image_base
 export const saveImageBase64 = (base64Data: string) => invoke<string>('save_image_base64', { base64Data });
 export const saveImageToFile = (sourcePath: string, outputScale: number) =>
   invoke<string | null>('save_image_to_file', { sourcePath, outputScale });
+// macOS-only: the destination path is resolved by the tauri-plugin-dialog
+// `save()` panel (`NSSavePanel`), so we hand Rust the already-chosen path
+// instead of asking it to run its own dialog (Windows owns the Win32 OFN
+// path inside `save_image_to_file`).
+export const saveImageToPath = (sourcePath: string, outputScale: number, destPath: string) =>
+  invoke<string | null>('save_image_to_path', { sourcePath, outputScale, destPath });
 export const getPendingImage = () => invoke<PendingImage | null>('get_pending_image');
 export const copyImageToClipboard = (path: string, outputScale: number) =>
   invoke<void>('copy_image_to_clipboard', { path, outputScale });
@@ -80,3 +86,23 @@ export const deleteScript = (path: string) => invoke<void>('delete_script', { pa
 export const checkRuntime = (language: string) => invoke<string>('check_runtime', { language });
 export const readScript = (path: string) => invoke<string>('read_script', { path });
 export const precompileScript = (path: string) => invoke<string>('precompile_script', { path });
+
+// macOS: open a System Settings privacy pane. Goes through Rust (NSWorkspace)
+// rather than tauri-plugin-opener — the main window's opener capability allows
+// only http/https, and the plugin spawns `open`, which the sandbox forbids.
+export const openSystemSettings = (url: string) =>
+  invoke<void>('open_system_settings', { url });
+
+// macOS: on-device OCR via Apple's Vision framework (VNRecognizeTextRequest).
+// Returns the joined recognised text, or an empty string when no text was
+// found. The path is validated server-side (`ensure_temp_screenshot_path`),
+// so a hostile caller cannot point it at arbitrary files — the same
+// guarantee every other path-taking command gives.
+export const recognizeText = (imagePath: string) =>
+  invoke<string>('recognize_text', { imagePath });
+
+// Open the Settings window on a given tab. Goes through Rust because the
+// Results/Editor windows are deliberately denied the ability to emit events
+// (see capabilities/results.json) — this keeps that restriction intact.
+export const openSettingsTab = (tab: 'general' | 'storage') =>
+  invoke<void>('open_settings_tab', { tab });

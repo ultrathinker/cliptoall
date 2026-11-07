@@ -23,19 +23,7 @@ pub fn invalidate_overlay() {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct SelectionRect {
-    pub x: i32,
-    pub y: i32,
-    pub width: i32,
-    pub height: i32,
-}
-
-#[derive(Debug)]
-pub enum OverlayResult {
-    Selection(SelectionRect),
-    PluginCall { path: String, function_id: String },
-}
+pub use crate::geometry::{OverlayResult, SelectionRect};
 
 // SAFETY: OverlayState is only accessed from the overlay thread.
 // The copy_image_flag pointer points to a 'static AtomicBool which is Sync.
@@ -172,6 +160,7 @@ pub fn show_native_overlay(
         // Pink-tinted dimmed (for "copy link" mode)
         let hdc_dimmed_pink = CreateCompatibleDC(hdc_screen);
         let mut pink_pixels = pixels.to_vec();
+        #[allow(clippy::chunks_exact_to_as_chunks)]
         for chunk in pink_pixels.chunks_exact_mut(4) {
             let b = chunk[0] as u16;
             let g = chunk[1] as u16;
@@ -189,6 +178,7 @@ pub fn show_native_overlay(
         // Green-tinted dimmed (for "copy image" mode)
         let hdc_dimmed_green = CreateCompatibleDC(hdc_screen);
         let mut green_pixels = pixels.to_vec();
+        #[allow(clippy::chunks_exact_to_as_chunks)]
         for chunk in green_pixels.chunks_exact_mut(4) {
             let b = chunk[0] as u16;
             let g = chunk[1] as u16;

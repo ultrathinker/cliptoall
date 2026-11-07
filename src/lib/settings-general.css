@@ -81,6 +81,13 @@
     color: #e74c3c;
   }
 
+  /* Shown only while listening for a new hotkey — tells the user how to back
+     out. Muted so it reads as guidance, not as an error. */
+  .hotkey-hint {
+    font-size: 8.5pt;
+    opacity: 0.7;
+  }
+
   /* Checkbox row wrapper for ? button alignment */
   .cb-row {
     display: flex;
