@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 date-based patch versions.
 
+## [macOS 5.1.25]
+
+### Added
+
+- **macOS support** (Apple silicon, macOS 14 or later), distributed as a
+  Developer-ID-signed, Apple-notarized `.dmg` (`ClipToAll-<version>-macos-arm64.dmg`).
+  Capture uses ScreenCaptureKit (Screen Recording permission), secrets are kept in
+  the Keychain, "Open at Login" uses the system login-item API, and the region
+  overlay is a webview with the same behaviour as on Windows. The default hotkey
+  is Ctrl+Cmd+X because Cmd+X is the system Cut shortcut.
+- Direct-distribution build is not sandboxed and uses the hardened runtime
+  (`src-tauri/Entitlements-direct.plist`); the sandboxed App Store entitlements
+  stay in `src-tauri/Entitlements.plist`. Build with `scripts/macos-release.sh`.
+
+### Known limitations
+
+- Apple silicon only; primary display only; the plugin system is Windows-only.
+- The Windows build is unchanged and keeps its own version line.
+
 ## [5.1.25]
 
 ### Added
