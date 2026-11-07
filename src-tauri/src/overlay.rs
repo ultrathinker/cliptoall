@@ -160,6 +160,7 @@ pub fn show_native_overlay(
         // Pink-tinted dimmed (for "copy link" mode)
         let hdc_dimmed_pink = CreateCompatibleDC(hdc_screen);
         let mut pink_pixels = pixels.to_vec();
+        #[allow(clippy::chunks_exact_to_as_chunks)]
         for chunk in pink_pixels.chunks_exact_mut(4) {
             let b = chunk[0] as u16;
             let g = chunk[1] as u16;
@@ -177,6 +178,7 @@ pub fn show_native_overlay(
         // Green-tinted dimmed (for "copy image" mode)
         let hdc_dimmed_green = CreateCompatibleDC(hdc_screen);
         let mut green_pixels = pixels.to_vec();
+        #[allow(clippy::chunks_exact_to_as_chunks)]
         for chunk in green_pixels.chunks_exact_mut(4) {
             let b = chunk[0] as u16;
             let g = chunk[1] as u16;
