@@ -22,6 +22,8 @@ mod sck_capture;
 mod sck_notifications;
 #[cfg(target_os = "macos")]
 mod sck_selftest;
+#[cfg(target_os = "macos")]
+mod tray_macos;
 mod utils;
 
 use std::collections::HashMap;
@@ -992,9 +994,19 @@ fn main() {
                     }
                 })
                 .on_tray_icon_event(|tray, event| {
+                    // macOS: the menu is detached from the status item (see
+                    // tray_macos.rs), so a right click opens it from here.
+                    #[cfg(target_os = "macos")]
+                    if let TrayIconEvent::Click { button: MouseButton::Right, button_state: MouseButtonState::Down, .. } = event {
+                        log("tray: right click, showing menu");
+                        tray_macos::show_menu();
+                        return;
+                    }
                     // Left click on tray icon → use default mode from settings,
                     // unless no storage is configured → force copy image mode
                     if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                        #[cfg(target_os = "macos")]
+                        log("tray: left click, starting capture");
                         let settings = commands::settings::load_settings_sync();
                         let storage_configured = if settings.storage_type == "s3" {
                             !settings.amazon_access_key_id.is_empty() && !settings.amazon_secret_access_key.is_empty()
@@ -1010,6 +1022,10 @@ fn main() {
                     }
                 })
                 .build(app)?;
+            // macOS 27 swallows left clicks on a status item that carries a
+            // menu; see tray_macos.rs.
+            #[cfg(target_os = "macos")]
+            tray_macos::detach_menu(&_tray);
 
             log("setup: tray ready");
 

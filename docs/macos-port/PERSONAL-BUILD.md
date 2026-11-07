@@ -60,7 +60,9 @@ clean staging folder; no Tauri DMG step), installs the plugin into the plugins
 directory and, with `--install-app`, copies the app to `/Applications`. Quit a
 running ClipToAll Personal first. It builds into its own Cargo target dir
 (`src-tauri/target-personal`), so the personal `.app` never lands next to the
-public one in `src-tauri/target/release/bundle/`.
+public one in `src-tauri/target/release/bundle/`, and it deletes its build
+and staging copies of the `.app` at the end, so Spotlight only finds the
+installed app.
 
 For development, always pass the overlay together with the feature:
 

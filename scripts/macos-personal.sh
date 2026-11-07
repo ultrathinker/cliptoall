@@ -24,7 +24,9 @@
 #   ./scripts/macos-personal.sh --install-app   # ... and also copy the app to /Applications
 #
 # Output: dist-macos/personal/ClipToAll-Personal-<version>-macos-arm64.zip
-# (the stapled app plus plugins/cliptoall-encryption-plugin).
+# (the stapled app plus plugins/cliptoall-encryption-plugin). The
+# intermediate .app copies are deleted at the end, so the zip and (with
+# --install-app) /Applications hold the only copies.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -170,5 +172,13 @@ if [ "$INSTALL_APP" -eq 1 ]; then
   codesign --verify --deep --strict "$DEST"
   echo "Installed app: $DEST"
 fi
+
+# ── 5. Clean up ────────────────────────────────────────────────────
+# Leave no extra copies of the app around: Spotlight and LaunchServices
+# index every .app bundle they find, so the build and staging copies would
+# show up as more "ClipToAll" entries next to the installed one. The zip
+# (which Spotlight does not look into) is the deliverable.
+rm -rf "$APP_SRC" "$OUT/stage"
+echo "Removed intermediate bundles (build output and staging folder)"
 
 echo "Done: $ZIP"
