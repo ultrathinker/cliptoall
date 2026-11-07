@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 date-based patch versions.
 
+## [macOS 5.1.26]
+
+### Fixed
+
+- **Left-click on the menu-bar icon starts a capture again** on macOS 27. The
+  tray menu was attached to the status item permanently, and macOS 27 then kept
+  left clicks from reaching the app; the menu is now attached only while it is
+  shown (right click), as in the upstream tray-icon fix.
+- **The capture overlay now covers the menu bar.** It used to sit below the
+  translucent menu bar, so while selecting a region the menu bar showed doubled
+  icons and a stray "«" chevron when macOS re-arranged the status items.
+
+### Changed
+
+- The DMG is built with `hdiutil` from a clean staging folder (only the app and
+  an Applications link), and the release script checks that the published
+  binary contains no plugin code. A plugin-enabled build for personal use is
+  documented in `docs/macos-port/PERSONAL-BUILD.md`; it is never published.
+
 ## [macOS 5.1.25]
 
 ### Added
@@ -241,6 +260,8 @@ First open-source release of the Tauri 2 rewrite of ClipToAll.
 - Restrictive Content-Security-Policy and per-window capability scoping.
 - `read_image_base64` restricted to the temp screenshot directory; plugin execution constrained to the plugins directory.
 
+[macOS 5.1.26]: https://github.com/ultrathinker/cliptoall/releases/tag/macos-v5.1.26
+[macOS 5.1.25]: https://github.com/ultrathinker/cliptoall/releases/tag/macos-v5.1.25
 [5.1.25]: https://github.com/ultrathinker/cliptoall/releases/tag/v5.1.25
 [5.1.24]: https://github.com/ultrathinker/cliptoall/releases/tag/v5.1.24
 [5.1.23]: https://github.com/ultrathinker/cliptoall/releases/tag/v5.1.23

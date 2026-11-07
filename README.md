@@ -67,7 +67,7 @@ Prebuilt binaries for Windows and macOS are published on the **[Releases](https:
 
 ### macOS
 
-Download **`ClipToAll-<version>-macos-arm64.dmg`** from the latest release tagged `macos-v*` (a `.sha256` file is attached for verification). The app is signed with a Developer ID certificate and notarized by Apple, so Gatekeeper opens it without warnings.
+Current version: **[ClipToAll 5.1.26 for macOS](https://github.com/ultrathinker/cliptoall/releases/tag/macos-v5.1.26)**. Download **`ClipToAll-<version>-macos-arm64.dmg`** from that release (or from a newer release tagged `macos-v*`); a `.sha256` file is attached for verification. The app is signed with a Developer ID certificate and notarized by Apple, so Gatekeeper opens it without warnings.
 
 Requirements: **macOS 14 Sonoma or later** on an **Apple silicon** Mac.
 

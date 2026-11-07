@@ -12,7 +12,24 @@
 #
 # Usage (repo root):  ./scripts/check-plugin-gate.sh            # debug builds
 #                     PROFILE=release ./scripts/check-plugin-gate.sh
+#                     ./scripts/check-plugin-gate.sh --public <binary>
+# The --public form builds nothing: it checks an existing binary (e.g. the
+# executable inside a release .app) and fails if it has any plugin code.
 set -euo pipefail
+
+MARKER='CLIPTOALL_PLUGIN_SYSTEM_COMPILED_IN_V1'
+SPAWN_SIGNAL='timeout: no hello within 20s'
+
+if [ "${1:-}" = "--public" ]; then
+  BIN="${2:?usage: check-plugin-gate.sh --public <binary>}"
+  [ -f "$BIN" ] || { echo "FAIL: binary not found: $BIN" >&2; exit 1; }
+  if LC_ALL=C grep -aqF -- "$MARKER" "$BIN" || LC_ALL=C grep -aqF -- "$SPAWN_SIGNAL" "$BIN"; then
+    echo "plugin gate: FAILED: $BIN contains plugin code"; exit 1
+  fi
+  echo "plugin gate: OK: $BIN has no plugin code"
+  exit 0
+fi
+
 cd "$(dirname "$0")/../src-tauri"
 
 [ "$(uname -s)" = "Darwin" ] || { echo "check-plugin-gate: macOS only" >&2; exit 2; }
@@ -21,9 +38,6 @@ PROFILE="${PROFILE:-debug}"
 PROFILE_FLAG=()
 [ "$PROFILE" = "release" ] && PROFILE_FLAG=(--release)
 BIN="${CARGO_TARGET_DIR:-target}/$PROFILE/cliptoall-tauri2"
-
-MARKER='CLIPTOALL_PLUGIN_SYSTEM_COMPILED_IN_V1'
-SPAWN_SIGNAL='timeout: no hello within 20s'
 
 has() {
   [ -f "$BIN" ] || { echo "FAIL: built binary not found at $BIN" >&2; exit 1; }
