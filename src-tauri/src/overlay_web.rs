@@ -120,7 +120,7 @@ pub fn overlay_finish(window: tauri::Window, x: i32, y: i32, width: i32, height:
 }
 
 #[tauri::command]
-#[cfg(windows)]
+#[cfg(plugins)]
 pub fn overlay_plugin_call(window: tauri::Window, path: String, function_id: String) -> Result<(), String> {
     require_overlay_window(&window)?;
     send_result(Some(OverlayResult::PluginCall { path, function_id }))
@@ -187,6 +187,48 @@ fn primary_monitor_logical_bounds(fallback_w: i32, fallback_h: i32) -> (f64, f64
     (0.0, 0.0, fallback_w as f64, fallback_h as f64)
 }
 
+/// Window level for the overlay: one above `NSStatusWindowLevel` (25), the
+/// level of the menu bar's status items (the menu bar itself is 24).
+///
+/// The overlay shows a frozen screenshot of the whole display, menu bar
+/// included, and has to take keyboard focus (Escape, plugin keys), which
+/// makes this accessory app the active one. Activating an app makes macOS
+/// re-lay out the live menu bar: the status items shift and, on a crowded
+/// or notched menu bar, the "«" overflow chevron appears. At Tauri's
+/// `always_on_top` level (floating, 3) the overlay sits UNDER the menu bar,
+/// which is translucent on current macOS (seen on 27), so the screenshot's
+/// copy of the menu bar showed through, offset from the shifted live icons:
+/// doubled icons and a doubled chevron for as long as the overlay was up.
+/// At this level the overlay covers the menu bar completely (measured: the
+/// menu bar then shows only the dimmed screenshot; 101 and 1000 look the
+/// same), as the Windows overlay covers the taskbar.
+#[cfg(target_os = "macos")]
+const OVERLAY_WINDOW_LEVEL: isize = 26;
+
+/// Put the overlay window above the menu bar (see `OVERLAY_WINDOW_LEVEL`).
+/// The level survives hide/show, so this runs once per window. AppKit wants
+/// it on the main thread; the window handle is cloned into that closure.
+fn raise_above_menu_bar(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    {
+        let w = window.clone();
+        let _ = window.run_on_main_thread(move || match w.ns_window() {
+            Ok(ns_window) if !ns_window.is_null() => {
+                // SAFETY: a live NSWindow owned by this WebviewWindow;
+                // -setLevel: is documented NSWindow API, called on the
+                // main thread.
+                unsafe {
+                    let ns_window = ns_window as *mut objc2::runtime::AnyObject;
+                    let _: () = objc2::msg_send![ns_window, setLevel: OVERLAY_WINDOW_LEVEL];
+                }
+            }
+            _ => crate::log("  overlay_web: no NSWindow, overlay stays below the menu bar"),
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+}
+
 /// Create the overlay window HIDDEN so its WKWebView is warm (JS bundle
 /// loaded, Svelte mounted once) well before the user's first capture.
 /// Call once from `main.rs`'s `.setup()`. Safe to call again — a no-op if
@@ -220,7 +262,10 @@ pub fn prewarm(app: &tauri::AppHandle) {
         .visible(false)
         .build();
     match result {
-        Ok(_) => crate::log(&format!("  overlay_web: prewarm build() done | +{}ms", t0.elapsed().as_millis())),
+        Ok(w) => {
+            raise_above_menu_bar(&w);
+            crate::log(&format!("  overlay_web: prewarm build() done | +{}ms", t0.elapsed().as_millis()))
+        }
         Err(e) => crate::log(&format!("  overlay_web: prewarm failed: {}", e)),
     }
 }
@@ -304,7 +349,10 @@ pub fn show_web_overlay(
                 .focused(true)
                 .build();
             match built {
-                Ok(w) => w,
+                Ok(w) => {
+                    raise_above_menu_bar(&w);
+                    w
+                }
                 Err(e) => {
                     crate::log(&format!("  overlay_web: window create failed: {}", e));
                     *PENDING.lock().unwrap() = None;

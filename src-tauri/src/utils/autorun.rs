@@ -185,10 +185,10 @@ mod smapp {
 /// migration in `remove_legacy_launch_agent_if_present` would silently miss
 /// the old file. The HANDOFF.md §1 ground rule "Windows is frozen" applies to
 /// Windows code paths; this constant is the single place the old label lives.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(feature = "personal")))]
 const LEGACY_LAUNCH_AGENT_LABEL: &str = "net.appshub.cliptoall";
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(feature = "personal")))]
 fn legacy_launch_agent_path() -> Option<std::path::PathBuf> {
     let home = dirs::home_dir()?;
     Some(
@@ -212,7 +212,7 @@ fn legacy_launch_agent_path() -> Option<std::path::PathBuf> {
 /// GitHub edition that signs without `app-sandbox`), the SAME function will
 /// successfully remove the legacy file. The two distributions differ only in
 /// signing, not in this code path.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(feature = "personal")))]
 fn remove_legacy_launch_agent_if_present() {
     let Some(path) = legacy_launch_agent_path() else {
         return;
@@ -247,6 +247,10 @@ pub fn set_autorun(enable: bool) -> Result<(), String> {
     // One-shot migration: clear any LaunchAgent plist left by the pre-SMAppService
     // build. Idempotent and safe on every call — it's a single `remove_file`
     // that succeeds once and then errors with NotFound forever after.
+    // Not in the personal build: that plist belongs to the PUBLIC app (its
+    // label is the public bundle identifier), and the personal build never
+    // wrote one, so removing it from here would touch the other app's state.
+    #[cfg(not(feature = "personal"))]
     remove_legacy_launch_agent_if_present();
 
     let service = smapp::main_app()

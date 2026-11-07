@@ -8,20 +8,33 @@ edition = "2021"
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }
 
-# The plugin system is Windows-only — gated with `#[cfg(windows)]`, not with a
-# Cargo feature, so there is exactly one macOS build and what you run is what
-# ships. Three reasons it cannot live on macOS:
-#   * `plugins_dir()` resolves to <exe dir>/plugins, which inside a .app bundle
-#     is `Contents/MacOS/plugins`. Dropping an executable there breaks the code
-#     signature of a notarised app — so the mechanism is broken on macOS even
-#     outside the App Store.
-#   * The App Sandbox forbids spawning external interpreters outright, so the
-#     store edition could never have it regardless of how it were gated.
-#   * A build flag would mean two macOS binaries to test by hand, and the one
-#     you happened to launch would not necessarily be the one that ships.
-# The code is not deleted — restoring it is a change of cfg predicate.
-# `geometry::OverlayResult::PluginCall` stays on both platforms: it carries two
-# `String`s and lets `handle_overlay_result` keep one identical shape.
+# Plugin system (plugins.rs, commands/plugins.rs and every call site), gated by
+# one cfg alias, `cfg(plugins)`, which build.rs sets:
+#   * Windows: always on. Plugins live in <exe dir>/plugins.
+#   * macOS: only with `--features personal` (the owner's personal build, see
+#     docs/macos-port/PERSONAL-BUILD.md). The default macOS build, which is what
+#     is published and what the App Store edition is made from, has no plugin
+#     code compiled in at all; CI checks that with a marker string
+#     (scripts/check-plugin-gate.sh).
+# Why the macOS default is off: a plugin is an arbitrary executable that runs
+# with the app's privileges and receives the clipboard, which is not something
+# a public screenshot tool should ship; and under the App Sandbox a plugin
+# could neither be installed outside the app's container nor run unsandboxed
+# (children inherit the sandbox), and App Review rejects downloading or running
+# external code (guideline 2.5.2), so the store edition could never have it
+# anyway. The personal build is signed Developer ID and NOT sandboxed.
+# Why its plugins dir is ~/Library/Application Support/<app>/plugins and not
+# next to the executable: inside a .app that would be Contents/MacOS/plugins,
+# and adding a file there breaks the notarised bundle's code signature.
+# `geometry::OverlayResult::PluginCall` stays in every build: it carries two
+# `String`s and lets `handle_overlay_result` keep one shape.
+[features]
+default = []
+# Personal build: plugin system on macOS, plus a separate app name, data dir
+# and Keychain service (src/utils/app_identity.rs) so it installs side by side
+# with the public app. Built with the tauri.personal.conf.json overlay, which
+# gives it its own bundle identifier. Never published.
+personal = []
 
 [dependencies]
 # The macOS web overlay window does NOT need transparency. It draws the dimmed

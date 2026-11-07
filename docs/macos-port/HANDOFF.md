@@ -591,7 +591,7 @@ the text was ever true.**
 | Gap | Where | Notes |
 |---|---|---|
 | **Multi-monitor capture** | `capture.rs::capture_to_memory` | Only the primary monitor is captured; Windows grabs the whole virtual screen. A selection dragged to a second display will misbehave. Flagged in-code. Now unblocked from the SCK migration — decide approach in a follow-up. |
-| **Plugins directory inside the bundle** | `plugins.rs::plugins_dir` | Resolves to `<exe_dir>/plugins`, which inside a signed `.app` is read-only and signature-sealed. Pre-existing (same on Windows), not introduced by the port. Fix alongside the `~/Library/Application Support` work in Phase 5b. |
+| ~~**Plugins directory inside the bundle**~~ | `plugins.rs::plugins_dir` | Resolved: the default macOS build has no plugin system at all, and the personal build (`--features personal`) uses `~/Library/Application Support/ClipToAll Personal/plugins`. Windows keeps `<exe_dir>/plugins`. See `PERSONAL-BUILD.md`. |
 | **Plugins never run end-to-end on macOS** | Phase 4 | Discovery uses the executable bit instead of `.exe`; `encryption-plugin` was verified standalone, but no plugin has been driven through the app itself. Also still to do: Unix process-group kill (`setsid`/`killpg`) replacing Windows Job Objects. |
 | **Signing / notarization / bundle** | Phase 5 | Certificates exist; nothing wired into the build. Screen-Recording TCC was re-verified after the SCK migration's stable dev signing (the self-test runs from the signed binary and succeeds — see §4). Notarization and bundle assembly are still open. |
 | **CI for macOS** | Phase 6 | `.github/workflows/build.yml` is Windows-only and triggers only on `main`. |

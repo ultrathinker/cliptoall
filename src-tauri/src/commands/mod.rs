@@ -10,13 +10,41 @@ pub mod ocr;
 pub mod upload_s3;
 pub mod upload_gdrive;
 pub mod gdrive_pool;
-/// Plugin commands are gated by the `plugins` Cargo feature (TASK B / Phase 4a).
-/// The Mac App Store build compiles this module out entirely with
-/// `--no-default-features` — see Cargo.toml for the rationale. The
+/// Plugin commands exist only where the plugin system is compiled in:
+/// `cfg(plugins)` = Windows always, macOS only with `--features personal`
+/// (set by build.rs; see the comment above `[features]` in Cargo.toml). The
 /// `commands::plugins::*` symbols referenced from main.rs's `generate_handler!`
 /// and `setup()` are likewise cfg-gated there.
-#[cfg(windows)]
+#[cfg(plugins)]
 pub mod plugins;
+
+/// What this binary was built with, for the frontend: the Settings window
+/// shows the Plugins tab only when `plugins` is true, so the UI can never
+/// offer a tab whose commands are not registered.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppCapabilities {
+    /// The plugin system is compiled in (`cfg(plugins)`).
+    plugins: bool,
+    /// Where plugins are discovered (None when there is no plugin system).
+    plugins_dir: Option<String>,
+    /// Directory name of this build's settings/data dir (`app_identity::APP_NAME`).
+    app_dir_name: &'static str,
+}
+
+#[tauri::command]
+pub fn app_capabilities() -> AppCapabilities {
+    #[cfg(plugins)]
+    let plugins_dir = crate::plugins::PluginManager::plugins_dir()
+        .map(|d| d.to_string_lossy().into_owned());
+    #[cfg(not(plugins))]
+    let plugins_dir = None;
+    AppCapabilities {
+        plugins: cfg!(plugins),
+        plugins_dir,
+        app_dir_name: crate::utils::app_identity::APP_NAME,
+    }
+}
 
 /// Reject an IPC call that comes from any window other than the main Settings
 /// window. Tauri does NOT gate app-defined commands per-window, so a command

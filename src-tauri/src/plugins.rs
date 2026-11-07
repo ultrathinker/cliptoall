@@ -20,6 +20,14 @@ unsafe impl Send for SendHandle {}
 #[cfg(windows)]
 unsafe impl Sync for SendHandle {}
 
+/// Build marker: present in every binary that has the plugin system compiled
+/// in, absent from every other. scripts/check-plugin-gate.sh (run in CI) greps
+/// the built binaries for it to prove the default macOS build has no
+/// plugin-spawning code. `#[used]` keeps the linker from dead-stripping it.
+/// Do not rename without updating that script.
+#[used]
+static PLUGIN_SYSTEM_MARKER: [u8; 38] = *b"CLIPTOALL_PLUGIN_SYSTEM_COMPILED_IN_V1";
+
 // ── Protocol types ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,11 +206,45 @@ impl PluginManager {
     }
 
     /// Get the plugins/ directory path (next to the exe). Creates it if missing.
+    #[cfg(not(target_os = "macos"))]
     pub fn plugins_dir() -> Option<PathBuf> {
         let exe_dir = std::env::current_exe().ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))?;
         let dir = exe_dir.join("plugins");
         let _ = std::fs::create_dir_all(&dir);
+        Some(dir)
+    }
+
+    /// macOS: `~/Library/Application Support/<app>/plugins`, never inside the
+    /// .app (a file added to the bundle breaks its notarised signature).
+    /// `<app>` is the build's own data dir name (`app_identity::APP_NAME`), so
+    /// the personal build never sees another build's plugins.
+    ///
+    /// Plugins run with the app's privileges and receive the clipboard, so the
+    /// directory is owner-only (0700) and must be a real directory: a symlink
+    /// in its place is refused, and so is a directory we cannot chmod (i.e.
+    /// one we do not own). Creates it if missing.
+    #[cfg(target_os = "macos")]
+    pub fn plugins_dir() -> Option<PathBuf> {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        let dir = dirs::config_dir()?
+            .join(crate::utils::app_identity::APP_NAME)
+            .join("plugins");
+        if let Err(e) = std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir) {
+            crate::log(&format!("plugins: cannot create {}: {}", dir.display(), e));
+            return None;
+        }
+        let meta = std::fs::symlink_metadata(&dir).ok()?;
+        if !meta.file_type().is_dir() {
+            crate::log(&format!("plugins: {} is not a directory (symlink?) — plugins disabled", dir.display()));
+            return None;
+        }
+        if meta.permissions().mode() & 0o777 != 0o700 {
+            if let Err(e) = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)) {
+                crate::log(&format!("plugins: cannot make {} owner-only: {} — plugins disabled", dir.display(), e));
+                return None;
+            }
+        }
         Some(dir)
     }
 
@@ -213,14 +255,60 @@ impl PluginManager {
     }
 
     /// macOS/Unix: no `.exe` convention, so a plugin is any file with the
-    /// executable bit set (PLAN.md Phase 1.4).
+    /// executable bit set (PLAN.md Phase 1.4). Only a REGULAR file qualifies —
+    /// `symlink_metadata` does not follow links, so a symlink (which could
+    /// point anywhere outside the plugins dir) is never launched — and not one
+    /// that other users could rewrite (group/world-writable).
     #[cfg(not(windows))]
     fn is_plugin_executable(path: &std::path::Path) -> bool {
         use std::os::unix::fs::PermissionsExt;
-        path.is_file()
-            && std::fs::metadata(path)
-                .map(|m| m.permissions().mode() & 0o111 != 0)
-                .unwrap_or(false)
+        // Script plugins are discovered (and run through their interpreter)
+        // by discover_script_files; an executable .py must not show up twice.
+        if matches!(path.extension().and_then(|e| e.to_str()), Some("py" | "cs" | "ps1")) {
+            return false;
+        }
+        match std::fs::symlink_metadata(path) {
+            Ok(m) if m.file_type().is_file() => {
+                let mode = m.permissions().mode();
+                if mode & 0o111 == 0 {
+                    return false;
+                }
+                if mode & 0o022 != 0 {
+                    crate::log(&format!("plugins: skipping {} — writable by group/others", path.display()));
+                    return false;
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// macOS/Unix: the same rules as discovery, enforced again right before
+    /// every spawn (daemon start, probe, oneshot), because a configured path
+    /// comes from plugins.json and not from discovery. The file must sit
+    /// DIRECTLY in the plugins dir (canonical parent == canonical dir, so no
+    /// subdirectories and no symlinked parents), must itself be a regular
+    /// file (not a symlink), and an executable plugin must also pass
+    /// `is_plugin_executable`. Script plugins only need to be regular files:
+    /// they are handed to their interpreter, not executed directly.
+    #[cfg(not(windows))]
+    pub(crate) fn check_launchable(path: &str, plugin_type: PluginType) -> Result<(), String> {
+        let p = std::path::Path::new(path);
+        let meta = std::fs::symlink_metadata(p).map_err(|e| format!("plugin {}: {}", path, e))?;
+        if !meta.file_type().is_file() {
+            return Err(format!("plugin {} is not a regular file (symlinks are not launched)", path));
+        }
+        let dir = Self::plugins_dir()
+            .and_then(|d| d.canonicalize().ok())
+            .ok_or("Cannot determine plugins directory")?;
+        let parent = p.parent().and_then(|d| d.canonicalize().ok());
+        if parent.as_deref() != Some(dir.as_path()) {
+            return Err(format!("plugin {} must be directly inside {}", path, dir.display()));
+        }
+        if plugin_type == PluginType::Exe && !Self::is_plugin_executable(p) {
+            return Err(format!("plugin {} is not an executable only its owner can write", path));
+        }
+        Ok(())
     }
 
     /// Find plugin executables in the plugins/ subfolder.
@@ -407,7 +495,7 @@ impl PluginManager {
         // trust boundary).
         match plugin_type {
             PluginType::Python => {
-                let mut cmd = Command::new("python");
+                let mut cmd = Command::new(python_program());
                 cmd.arg(path);
                 cmd
             }
@@ -429,6 +517,8 @@ impl PluginManager {
 
     /// Spawn a plugin process with --daemon flag, read hello with 20s timeout.
     fn spawn_and_hello_ext(path: &str, plugin_type: PluginType) -> Result<(Child, ChildStdin, BufReader<ChildStdout>, PluginHello), String> {
+        #[cfg(not(windows))]
+        Self::check_launchable(path, plugin_type)?;
         let mut cmd = Self::build_command(path, plugin_type);
         // For C#, script args go after "--" separator
         if plugin_type == PluginType::CSharp {
@@ -626,6 +716,8 @@ impl PluginManager {
             .map_err(|e| format!("Failed to write call file: {}", e))?;
         let call_arg = format!("@{}", call_file.display());
 
+        #[cfg(not(windows))]
+        Self::check_launchable(path, plugin_type)?;
         let mut cmd = Self::build_command(path, plugin_type);
         if plugin_type == PluginType::CSharp {
             cmd.args(["--", "--call", &call_arg]);
@@ -916,10 +1008,17 @@ pub(crate) fn powershell_path() -> std::path::PathBuf {
     std::path::PathBuf::from("powershell")
 }
 
+/// The Python interpreter name: `python` on Windows (as it always was);
+/// `python3` elsewhere, because macOS ships only `/usr/bin/python3` and a GUI
+/// app's PATH holds nothing but the system directories.
+pub(crate) fn python_program() -> &'static str {
+    if cfg!(windows) { "python" } else { "python3" }
+}
+
 /// Check if a runtime (python/dotnet) is available in PATH.
 pub fn check_runtime(language: &str) -> Result<String, String> {
     let cmd_name = match language {
-        "python" => "python",
+        "python" => python_program(),
         "csharp" => "dotnet",
         "powershell" => "powershell",
         _ => return Err(format!("Unknown language: {}", language)),
@@ -1027,6 +1126,32 @@ mod tests {
     #[test]
     fn parse_missing_plugin_tag_is_none() {
         assert!(parse_script_metadata("print('x')", PluginType::Python).is_none());
+    }
+
+    /// Only owner-controlled regular executables are launched on macOS.
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_plugin_executable_rules() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = std::env::temp_dir().join(format!("cta_plugin_test_{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&dir).unwrap();
+        let make = |name: &str, mode: u32| {
+            let p = dir.join(name);
+            std::fs::write(&p, b"#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
+            p
+        };
+        let ok = make("plugin", 0o755);
+        assert!(PluginManager::is_plugin_executable(&ok));
+        assert!(!PluginManager::is_plugin_executable(&make("not-exec", 0o644)));
+        assert!(!PluginManager::is_plugin_executable(&make("group-writable", 0o775)));
+        assert!(!PluginManager::is_plugin_executable(&make("world-writable", 0o757)));
+        assert!(!PluginManager::is_plugin_executable(&make("script.py", 0o755)));
+        let link = dir.join("link");
+        symlink(&ok, &link).unwrap();
+        assert!(!PluginManager::is_plugin_executable(&link));
+        assert!(!PluginManager::is_plugin_executable(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

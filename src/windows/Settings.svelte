@@ -4,13 +4,14 @@
   import { settings, type AppSettings } from '../lib/stores/settings';
   import { applyTheme } from '../lib/stores/theme';
   import type { DiscoveredPlugin, PluginConfig } from '../lib/plugin-types';
-  import { helpTexts } from '../lib/help-texts';
+  import { buildHelpTexts } from '../lib/help-texts';
   import { showAlert } from '../lib/stores/alert.svelte';
-  import { PLUGINS_ENABLED } from '../lib/features';
+  import { capabilities, loadCapabilities } from '../lib/features';
   import '../lib/settings-shared.css';
-  // SettingsPlugins is only loaded on builds with the `plugins` Cargo feature
-  // (TASK B / Phase 4a). Importing it lazily keeps the store edition's JS
-  // bundle free of plugin UI even though the file ships in the repo.
+  // SettingsPlugins is mounted only when the binary has the plugin system
+  // (`$capabilities.plugins`: Windows always; macOS only in the personal
+  // build). The component ships in the bundle either way; without the
+  // plugin system nothing ever mounts it or calls its commands.
   import SettingsGeneral from './SettingsGeneral.svelte';
   import SettingsStorage from './SettingsStorage.svelte';
   import SettingsPlugins from './SettingsPlugins.svelte';
@@ -31,10 +32,10 @@
   let originalTheme = $state($settings.theme);
   let helpTopic = $state<string | null>(null);
   let guideTab = $state<'general' | 'plugins'>('general');
-  // `plugins` is only a valid activeTab value when PLUGINS_ENABLED is true.
-  // Initial state stays 'general' either way; the tab button below is the
-  // gate, so the value can never be 'plugins' on the store build (no user
-  // input reaches it).
+  // `plugins` is only a valid activeTab value when `$capabilities.plugins` is
+  // true. Initial state stays 'general' either way; the tab button below is
+  // the gate, so the value can never be 'plugins' in a build without the
+  // plugin system (no user input reaches it).
   let activeTab = $state<'general' | 'storage' | 'plugins'>('general');
 
   // Follow every request, not just the first. Reruns only when `seq` changes,
@@ -56,7 +57,12 @@
   let gdriveConnected = $state(false);
   let gdriveEmail = $state('');
 
+  // Help texts depend on what this binary has (plugins, data dir name).
+  let helpTexts = $derived(buildHelpTexts($capabilities.plugins, $capabilities.appDirName));
+  let pluginsEnabled = $derived($capabilities.plugins);
+
   onMount(async () => {
+    loadCapabilities();
     try {
       gdriveConnected = await gdriveHasToken();
     } catch (_) {}
@@ -70,7 +76,7 @@
   async function handleSave() {
     try {
       // Validate plugin settings before saving
-      if (pluginsScanned) {
+      if (pluginsEnabled && pluginsScanned) {
         for (const cfg of pluginConfigs) {
           if (!cfg.enabled) continue;
           const plugin = discoveredPlugins.find(p => p.path === cfg.path);
@@ -88,7 +94,7 @@
         await updateHotkey(localSettings.captureHotkey);
       }
       await saveSettings(localSettings);
-      if (pluginsScanned) {
+      if (pluginsEnabled && pluginsScanned) {
         await applyPluginConfig(pluginConfigs);
       }
       settings.set(localSettings);
@@ -106,15 +112,14 @@
 </script>
 
 <div class="settings-page">
-  <!-- Tab bar. The Plugins tab is omitted entirely when the `plugins`
-       Cargo feature is off (TASK B / Phase 4a). Per the brief: not merely
-       hidden — must not exist. The Svelte tree below never contains a
-       `SettingsPlugins` mount or any `activeTab === 'plugins'` branch on
-       the store build, so the corresponding CSS / IPC stubs cannot leak. -->
+  <!-- Tab bar. The Plugins tab is not rendered at all when the binary has no
+       plugin system (`$capabilities.plugins` false: the default macOS
+       build). The Svelte tree below then never contains a `SettingsPlugins`
+       mount, so none of its plugin commands is ever invoked. -->
   <div class="tab-bar">
     <button class="tab-btn" class:active={activeTab === 'general'} onclick={() => activeTab = 'general'}>General</button>
     <button class="tab-btn" class:active={activeTab === 'storage'} onclick={() => activeTab = 'storage'}>Storage</button>
-    {#if PLUGINS_ENABLED}
+    {#if pluginsEnabled}
       <button class="tab-btn" class:active={activeTab === 'plugins'} onclick={() => activeTab = 'plugins'}>Plugins</button>
     {/if}
   </div>
@@ -128,7 +133,7 @@
     <SettingsStorage settings={localSettings} {showHelp} bind:gdriveConnected bind:gdriveEmail />
   {/if}
 
-  {#if PLUGINS_ENABLED && activeTab === 'plugins'}
+  {#if pluginsEnabled && activeTab === 'plugins'}
     <SettingsPlugins
       bind:pluginConfigs
       bind:discoveredPlugins
@@ -149,14 +154,14 @@
 
 {#if helpTopic && helpTexts[helpTopic]}
   {@const isGuide = helpTopic === 'guide'}
-  {@const currentTopic = isGuide ? (guideTab === 'plugins' && PLUGINS_ENABLED ? 'guidePlugins' : 'guide') : helpTopic}
+  {@const currentTopic = isGuide ? (guideTab === 'plugins' && pluginsEnabled ? 'guidePlugins' : 'guide') : helpTopic}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div class="help-overlay" role="button" tabindex="-1" onclick={() => helpTopic = null} onkeydown={(e) => { if (e.key === 'Escape') helpTopic = null; }}>
     <div class="help-popup" role="dialog" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}>
       {#if isGuide}
         <div class="guide-tab-bar">
           <button class="guide-tab" class:active={guideTab === 'general'} onclick={() => guideTab = 'general'}>User Guide</button>
-          {#if PLUGINS_ENABLED}
+          {#if pluginsEnabled}
             <button class="guide-tab" class:active={guideTab === 'plugins'} onclick={() => guideTab = 'plugins'}>Plugins</button>
           {/if}
         </div>
