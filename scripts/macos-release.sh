@@ -44,12 +44,15 @@ export APPLE_SIGNING_IDENTITY
 
 # Keep local paths out of the binary. rustc records the source path of every
 # crate it compiles (panic locations, file!()), including the cargo registry
-# under the builder's home folder; remap them to neutral prefixes. The
-# encoded form (0x1f-separated) survives paths with spaces. It replaces any
-# RUSTFLAGS from the calling shell.
+# under the builder's home folder; remap them to neutral prefixes. The linker
+# also writes a debug map (STABS) naming every object file and C source dir
+# that carries debug info (ring's C/asm objects, the prebuilt
+# compiler_builtins); `ld -S` leaves it out. (Cargo's own strip step cannot be
+# used, see below.) The encoded form (0x1f-separated) survives paths with
+# spaces. It replaces any RUSTFLAGS from the calling shell.
 REPO_ROOT="$(pwd -P)"
 SEP=$'\x1f'
-export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo${SEP}--remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup${SEP}--remap-path-prefix=$REPO_ROOT=/cliptoall"
+export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo${SEP}--remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup${SEP}--remap-path-prefix=$REPO_ROOT=/cliptoall${SEP}-Clink-arg=-Wl,-S"
 
 # (Output is captured first: with pipefail, `cmd | grep -q` can fail when grep
 # exits early and cmd dies of SIGPIPE.)
