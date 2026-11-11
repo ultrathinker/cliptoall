@@ -35,7 +35,7 @@
   /// VNRecognizeTextRequest off-thread; we track the in-flight state here so
   /// the button can show its spinner. Three terminal states map to three
   /// short confirmation strings the user can read in-place, matching how
-  /// "Copy link" already handles success/failure (mx-ocr brief §Frontend).
+  /// "Copy link" already handles success/failure.
   let copyTextLabel = $state('Copy text');
   let copyTextRunning = $state(false);
   let copyTextResetTimer: number | undefined;
@@ -216,7 +216,7 @@
   /// capture via `recognize_text` (Apple Vision under the hood), then puts
   /// the result on the clipboard. Empty result is treated as "no text
   /// found" and surfaced in-place rather than overwriting the clipboard
-  /// with a stray empty string — the brief is explicit about this.
+  /// with a stray empty string.
   async function copyText() {
     if (copyTextRunning) return; // ignore re-entry while recognition is in flight
     const path = currentImagePath();

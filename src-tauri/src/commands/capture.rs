@@ -14,8 +14,8 @@ pub struct CaptureData {
     /// Raw 4-bytes-per-pixel data in whichever order this platform's capture
     /// backend natively produces: BGRA on Windows (GDI), RGBA on macOS
     /// (ScreenCaptureKit via `sck_capture`, after drawing through an RGBA
-    /// bitmap context — see HANDOFF §4.1 / bug #14 on why we deliberately
-    /// keep the overlay's RGBA contract and avoid a second channel swap).
+    /// bitmap context: we deliberately keep the overlay's RGBA contract and
+    /// avoid a second channel swap).
     pub buffer: Vec<u8>,
     pub width: i32,
     pub height: i32,
@@ -307,19 +307,14 @@ pub fn cleanup_temp_files() {
 /// Windows' `capture_to_memory` grabs the whole virtual screen (every
 /// monitor in one buffer, via `SM_CXVIRTUALSCREEN`); this captures only the
 /// PRIMARY monitor for now — proper multi-monitor compositing is a follow-up
-/// (PLAN.md Phase 2.1 flags evaluating multi-monitor before committing to an
-/// approach), so a selection dragged onto a second display will misbehave
+/// (multi-monitor needs evaluating before committing to an approach), so a selection dragged onto a second display will misbehave
 /// until then.
 ///
 /// Replaces the previous `xcap`-backed implementation (`CGWindowListCreateImage`
-/// under the hood, deprecated since macOS 14). The "~270 ms" baseline was
-/// inherited from round-1 reporting; see the §0 caveat in HANDOFF.md §4
-/// for why that number is no longer trustworthy. Round-2 measured
-/// `capture_to_memory` lands at 79–100 ms end-to-end on this machine at
-/// the full 2560×1600 backing-store resolution (see `mx-sck-report.md` for
-/// the breakdown — the round-1 "~30–40 ms" claim quoted in earlier versions
-/// of this comment was measured at a quarter of the display's real
-/// resolution, bug #21, and does not reflect current code). The actual
+/// under the hood, deprecated since macOS 14). Measured on an Apple-silicon
+/// Mac at the full 2560×1600 backing-store resolution, `capture_to_memory`
+/// takes 79–100 ms end to end (older, lower numbers were measured at a
+/// quarter of the display's real resolution and do not apply). The actual
 /// capture logic lives in `sck_capture` to keep `capture_to_memory`
 /// readable.
 #[cfg(target_os = "macos")]
@@ -336,7 +331,7 @@ pub fn capture_to_memory() -> Result<CaptureData, String> {
 }
 
 /// Linux: ScreenCaptureKit is not available, and the project has never
-/// supported Linux (see EXECUTION-PLAN §2). Build must still parse; runtime
+/// supported Linux. Build must still parse; runtime
 /// path returns an error so it can't accidentally succeed.
 #[cfg(target_os = "linux")]
 pub fn capture_to_memory() -> Result<CaptureData, String> {
@@ -459,7 +454,7 @@ pub fn crop_and_save_from_buffer(
     // one order at capture time and paying for a channel-swap pass over
     // the whole screen on every single capture, only to (on macOS) undo
     // that exact swap again for the web overlay's canvas, which wants RGBA
-    // anyway. See HANDOFF §4.1 / bug #14. This is the one place that needs
+    // anyway. This is the one place that needs
     // to know which order it's reading.
     #[cfg(windows)]
     let (ri, gi, bi) = (2usize, 1usize, 0usize); // BGRA
@@ -578,7 +573,7 @@ pub fn save_image_to_file(source_path: String, output_scale: f32) -> Result<Opti
     // Only ever re-encode a genuine ClipToAll temp screenshot. Every other
     // path-taking command validates its input this way; save_image_to_file was
     // the lone exception, letting a caller point it at an arbitrary file to be
-    // read and rewritten to the user-chosen destination (Codex finding #1).
+    // read and rewritten to the user-chosen destination.
     ensure_temp_screenshot_path(&source_path)?;
 
     let src = Path::new(&source_path);
@@ -665,7 +660,7 @@ pub fn save_image_to_file(source_path: String, output_scale: f32) -> Result<Opti
 ///
 /// The encoding logic is deliberately duplicated from the Windows
 /// `save_image_to_file` rather than factored into a shared helper, because
-/// Phase 3 brief mandates "the Windows path must be byte-for-byte untouched".
+/// the Windows path must stay byte-for-byte untouched by the macOS port.
 /// If you change one, change both — the two stay in lockstep by design.
 ///
 /// Returns Some(path) on success. The frontend treats a null result from the

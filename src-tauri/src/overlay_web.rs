@@ -4,9 +4,8 @@
 //! screenshot drawn onto a canvas covering the whole screen (`100vw` ×
 //! `100vh`, `position: fixed`, `inset: 0` in OverlayWeb.svelte), so it is
 //! already opaque edge to edge — no NSWindow transparency is needed and
-//! `macos-private-api` is intentionally NOT enabled (see
-//! docs/macos-port/APP-STORE-PLAN.md §1; that flag would block the App Store
-//! build). See docs/macos-port/OVERLAY-SPEC.md for the visual and behavioral
+//! `macos-private-api` is intentionally NOT enabled (that flag would block
+//! the App Store build). See docs/macos-port/OVERLAY-SPEC.md for the visual and behavioral
 //! contract this is built against.
 //!
 //! Single-monitor only for now (matches `capture::capture_to_memory`'s
@@ -171,15 +170,15 @@ fn send_result(result: Option<OverlayResult>) -> Result<(), String> {
 /// while the capture path resolved its own display separately; on a
 /// multi-monitor setup those can be different screens, which would put the
 /// overlay on the wrong one. One helper, one definition of "the display we
-/// capture" (HANDOFF §4).
+/// capture".
 ///
 /// Falls back to the supplied defaults only if the display mode cannot be
 /// read at all.
 fn primary_monitor_logical_bounds(fallback_w: i32, fallback_h: i32) -> (f64, f64, f64, f64) {
     // `sck_capture` is `#[cfg(target_os = "macos")]`; this module is
     // `#[cfg(not(windows))]`, so it also parses on Linux, where there is no
-    // capture backend to ask (EXECUTION-PLAN §2 — Linux is out of scope but
-    // must not break the build).
+    // capture backend to ask (Linux is out of scope but must not break the
+    // build).
     #[cfg(target_os = "macos")]
     if let Some(bounds) = crate::sck_capture::capture_display_logical_bounds() {
         return bounds;
@@ -287,8 +286,7 @@ pub fn show_web_overlay(
 
     // `capture_to_memory` (macOS) produces RGBA — ScreenCaptureKit hands
     // back a CGImage in BGRA premultiplied, but `sck_capture` draws it
-    // through an RGBA bitmap context (see HANDOFF §4.1 / bug #14 on why
-    // we never produce BGRA), so the bytes here are already RGBA and no
+    // through an RGBA bitmap context (we never produce BGRA), so the bytes here are already RGBA and no
     // conversion is needed. This is one copy: `capture` in main.rs's
     // start_capture is used again afterward (crop_and_save_from_buffer),
     // so this can't take ownership of it — but a plain memcpy of a few MB

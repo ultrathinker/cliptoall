@@ -2,12 +2,9 @@
 //!
 //! Replaces `xcap` / `CGWindowListCreateImage` (deprecated since macOS 14)
 //! with `SCScreenshotManager.captureImage`, which is GPU-backed. The
-//! xcap baseline was inherited from round-1 reporting at ~270 ms per capture
-//! — that figure was measured here, but round 1 was capturing at a
-//! quarter of the resolution it thought (HANDOFF bug #21); what gets
-//! compared against this baseline is the round-2 number of 79–100 ms
-//! end-to-end at the full 2560×1600 backing-store resolution. See
-//! HANDOFF.md §4, `mx-sck-report.md`, and the SCK migration brief.
+//! capture takes 79–100 ms end to end at the full 2560×1600 backing-store
+//! resolution (an earlier ~270 ms xcap figure was measured at a quarter
+//! of the real resolution and is not comparable).
 //!
 //! ## Architecture
 //!
@@ -34,7 +31,7 @@
 //!
 //! `SCScreenshotManager` hands back a `CGImage` whose pixel order is the
 //! framework's choice (BGRA premultiplied on macOS). The overlay needs RGBA
-//! (`ImageData` is RGBA by definition; see HANDOFF §4.1 / bug #14 — a
+//! (`ImageData` is RGBA by definition; a
 //! Rust-side channel-swap over a 16MP capture costs ~180ms and there used
 //! to be TWO of them that cancelled each other out). We avoid producing
 //! BGRA at all: the CGImage is drawn into a bitmap context we allocate
@@ -44,8 +41,8 @@
 //! channel indices (the non-Windows branch) keep working unchanged. The
 //! change really is scoped to this one module.
 //!
-//! **Do not "simplify" `byteOrder32Big` to `byteOrder32Little`.** See
-//! HANDOFF bug #22: `premultipliedLast | byteOrder32Little` lays the same
+//! **Do not "simplify" `byteOrder32Big` to `byteOrder32Little`.**
+//! `premultipliedLast | byteOrder32Little` lays the same
 //! 32-bit word down LSB-first, i.e. A, B, G, R in memory. That shipped in
 //! round 1 of this migration and passed a visual inspection, because a
 //! screen capture's alpha is always 255 and the resulting image is
@@ -54,7 +51,7 @@
 //! ## Coordinate spaces (read this before touching any dimension)
 //!
 //! This port's most expensive recurring bug class is logical points vs
-//! physical pixels (HANDOFF bugs #7 and #21). Every dimension in this
+//! physical pixels. Every dimension in this
 //! module therefore carries its space in its name (`_px` / `_pts`) and
 //! `DisplayGeometry` is the single place both are derived. In short:
 //!
@@ -98,7 +95,7 @@ use std::time::Instant;
 ///
 /// Derived from the display's current *mode* rather than from
 /// `CGDisplayPixelsWide/High`, because those two return **points**, not
-/// backing-store pixels, on any HiDPI display (HANDOFF bug #21 — that is
+/// backing-store pixels, on any HiDPI display (that is
 /// exactly how round 1 of this migration shipped a quarter-resolution
 /// capture and a scale factor of 1.0 on a 2× Retina panel).
 #[derive(Debug, Clone, Copy)]
@@ -232,7 +229,7 @@ impl Deref for ShareableContent {
 unsafe impl Send for ShareableContent {}
 unsafe impl Sync for ShareableContent {}
 
-/// What the brief asks us to pre-warm. Holds a `+1`-retained
+/// What we pre-warm. Holds a `+1`-retained
 /// `SCShareableContent` across captures so the hot path doesn't pay the
 /// window-server IPC + TCC check on every `Cmd+X`.
 static CACHED_CONTENT: Mutex<Option<ShareableContent>> = Mutex::new(None);
@@ -432,8 +429,8 @@ pub fn capture_via_sck_timed(t0: Instant) -> Result<(CaptureData, CaptureTimings
     // The Apple docs are explicit: initWithDisplay:includingWindows:
     // with an empty array captures NOTHING (only-windows is
     // intersection-with). excludingWindows: with empty is "capture the
-    // display except these (none)" — i.e. capture everything. See brief
-    // §4.3 — the wrong-init mistake looks identical to a permissions
+    // display except these (none)" — i.e. capture everything. The
+    // wrong-init mistake looks identical to a permissions
     // failure and costs hours to diagnose.
     let empty_windows = NSArray::<SCWindow>::from_slice(&[]);
     let filter = unsafe {
@@ -444,14 +441,14 @@ pub fn capture_via_sck_timed(t0: Instant) -> Result<(CaptureData, CaptureTimings
         )
     };
 
-    // Build SCStreamConfiguration. Per brief §4.4: showsCursor defaults to
+    // Build SCStreamConfiguration. showsCursor defaults to
     // true; CGWindowListCreateImage never drew the cursor, so leaving it
     // on is a silent regression.
     //
     // width/height are PHYSICAL PIXELS. SCK's content rect is the display's
     // point-space rect; the configuration size is what the framework
     // rasterises it to. Feeding it points here is what produced round 1's
-    // quarter-resolution capture (HANDOFF bug #21).
+    // quarter-resolution capture.
     let config = unsafe { SCStreamConfiguration::new() };
     unsafe {
         config.setShowsCursor(false);
@@ -466,7 +463,7 @@ pub fn capture_via_sck_timed(t0: Instant) -> Result<(CaptureData, CaptureTimings
     ));
 
     // Capture. SCK's API is async (completion handler); the call site is
-    // already off the main thread (brief §4.6), so a blocking recv is
+    // already off the main thread, so a blocking recv is
     // safe here. We bridge the completion to sync via mpsc.
     let t_capture = Instant::now();
     let (tx, rx) = mpsc::channel::<Result<Retained<CGImage>, String>>();
@@ -533,7 +530,7 @@ pub fn capture_via_sck_timed(t0: Instant) -> Result<(CaptureData, CaptureTimings
     // the CGImage into it. CoreGraphics does the BGRA→RGBA channel
     // conversion in C — no per-pixel loop in Rust — and the output is
     // densely packed because WE choose the stride (width * 4), so there is
-    // no row padding to shear the image (brief §4.2).
+    // no row padding to shear the image.
     let t_draw = Instant::now();
     let rgba = draw_cgimage_into_rgba(&cg_image, cg_w, cg_h)?;
     timings.draw_ms = t_draw.elapsed().as_millis();
@@ -592,7 +589,7 @@ pub fn capture_via_sck_timed(t0: Instant) -> Result<(CaptureData, CaptureTimings
 /// `(R<<24)|(G<<16)|(B<<8)|A` down MSB-first, i.e. **R, G, B, A in memory**
 /// — which is what `ImageData` in the overlay and `crop_and_save_from_buffer`'s
 /// `(ri, gi, bi) = (0, 1, 2)` both require. The little-endian variant of the
-/// same word is A, B, G, R; that is HANDOFF bug #22, and it is invisible to
+/// same word is A, B, G, R; that mistake is invisible to
 /// the naked eye on a screenshot (alpha is always 255, so every pixel comes
 /// out saturated in one channel and the image looks like a colour cast).
 fn draw_cgimage_into_rgba(
@@ -654,13 +651,13 @@ pub fn prewarm_capture_backend(t0: Instant) {
 }
 
 /// Effective DPI scale (1.0 = 96 dpi/100%, 2.0 = Retina) of the display we
-/// capture. The capture path is single-monitor (HANDOFF §7) so we don't need
+/// capture. The capture path is single-monitor so we don't need
 /// to hit-test the given point — every selection is on the same display.
 ///
 /// Computed as backing-store pixels ÷ logical points of the SAME display
 /// mode. Round 1 computed it as `CGDisplayPixelsWide / SCDisplay.width()`,
-/// which is points ÷ points = 1.0 on every Retina display — bug #7 all over
-/// again through a different API (HANDOFF bug #21). Deliberately does not
+/// which is points ÷ points = 1.0 on every Retina display — the points-vs-pixels
+/// mistake again, through a different API. Deliberately does not
 /// touch the `SCShareableContent` cache: this must answer correctly even if
 /// the prewarm failed.
 #[allow(dead_code)]
@@ -704,8 +701,8 @@ pub fn primary_monitor_scale() -> f32 {
 ///
 /// Cheap and side-effect-free; safe to call on every hotkey press. Returns
 /// `false` for an unsigned ad-hoc build (the OS only recognizes stable
-/// signatures for TCC purposes — HANDOFF bug #11 covers why this project's
-/// dev runs use a stable codesigning identity rather than Xcode's default).
+/// signatures for TCC purposes, which is why this project's dev runs use a
+/// stable codesigning identity; see src-tauri/scripts/macos-dev-runner.sh).
 pub fn screen_capture_access_granted() -> bool {
     // CGPreflightScreenCaptureAccess is declared `extern "C-unwind"` by
     // objc2-core-graphics — wrap in catch_unwind so a panic on the FFI

@@ -4,7 +4,7 @@
 > native Win32 overlay. Extracted 2026-08-08 from `src-tauri/src/overlay.rs`
 > (583 lines) — every number here is read directly from that file, not
 > approximated. Re-check against `overlay.rs` if it changes before Phase 3
-> starts (PLAN.md's "Windows is frozen" principle means it shouldn't, but
+> starts (the port's "Windows is frozen" principle means it shouldn't, but
 > verify).
 
 ## 1. Screen dim + mode tint
@@ -139,7 +139,7 @@ equivalent: `cursor: crosshair` on the overlay root.
 - Single topmost, borderless popup window sized to the FULL virtual screen
   (`screen_left/top/width/height` — all monitors combined on Windows).
   Phase 3's web overlay instead opens one `WebviewWindow` **per monitor**
-  (PLAN.md 3.2) since Tauri doesn't span a single window across displays the
+  since Tauri doesn't span a single window across displays the
   way Win32 does — the Shift-square and label positioning logic must operate
   in EACH window's own local coordinate space, not a shared virtual-screen
   space.
@@ -149,7 +149,7 @@ equivalent: `cursor: crosshair` on the overlay root.
   canvas / use `requestAnimationFrame`, avoid clearing+redrawing the whole
   frame synchronously with layout) should aim for the same flicker-free feel.
 - The screenshot is handed to the overlay as a raw pixel buffer already in
-  memory (no round-trip through a file) — PLAN.md 3.2 already calls for
+  memory (no round-trip through a file) — the port plan already calls for
   passing it to the web overlay as an `ArrayBuffer`, not base64, for the same
   reason (speed).
 
@@ -159,4 +159,4 @@ equivalent: `cursor: crosshair` on the overlay root.
   monitors; the web overlay is per-monitor — cross-monitor drag behavior is
   a new design question, not a port).
 - Any onboarding/permission-related UI (Screen Recording TCC) — unrelated to
-  the overlay itself, covered by PLAN.md Phase 5.1.
+  the overlay itself.

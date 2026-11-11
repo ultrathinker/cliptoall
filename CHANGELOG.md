@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 date-based patch versions.
 
+## [macOS 5.1.27]
+
+### Changed
+
+- **The macOS build no longer contains local build paths.** The Rust compiler
+  records the source path of every crate it builds, so 5.1.25 and 5.1.26
+  carried the build machine's folder names. `scripts/macos-release.sh` now
+  remaps those paths (`--remap-path-prefix`) and refuses to ship an app that
+  still contains the builder's home folder or user name. The app itself is
+  unchanged from 5.1.26.
+- The App Store submission drafts and the internal notes of the macOS port are
+  no longer part of the public repository.
+
 ## [macOS 5.1.26]
 
 ### Fixed

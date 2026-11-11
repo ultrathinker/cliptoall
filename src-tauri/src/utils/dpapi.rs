@@ -10,7 +10,7 @@
 //! ("keychain:<account>") to embed inline where DPAPI ciphertext used to go;
 //! "decrypt" looks the account back up. The account must be stable across
 //! saves (not a fresh UUID per call) or every settings save would leak a new
-//! orphaned Keychain entry (PLAN.md Phase 1.2).
+//! orphaned Keychain entry.
 
 #[cfg(windows)]
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};

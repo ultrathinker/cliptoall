@@ -1,7 +1,6 @@
 //! On-device text recognition ("Copy text") for the macOS build.
 //!
-//! Why this module exists: see `docs/macos-port/APP-STORE-PLAN.md` §6 and
-//! the brief at `mx-ocr.md`. The capture is already a temp PNG on disk;
+//! The capture is already a temp PNG on disk;
 //! Apple's Vision framework (`VNRecognizeTextRequest`) reads it, runs
 //! recognition entirely on-device with no entitlement and no network, and
 //! returns the recognised text. It is the strongest single answer to
@@ -31,11 +30,11 @@
 //!
 //! * **Empty result is success.** Vision returning no recognised text is a
 //!   normal outcome (e.g. a screenshot of a photo, a UI without copyable
-//!   labels), not a failure. The brief says to return an empty string in
-//!   that case, and that is what the frontend distinguishes "no text found"
+//!   labels), not a failure. We return an empty string in that case,
+//!   which is how the frontend distinguishes "no text found"
 //!   from "OCR failed".
 //!
-//! * **Language handling.** Per the brief: query
+//! * **Language handling.** Query
 //!   `supportedRecognitionLanguagesAndReturnError:` (macOS 12+, our floor
 //!   is 14) on a fresh `VNRecognizeTextRequest` to learn what the running
 //!   Vision supports; intersect with `NSLocale.preferredLanguages`; pass
@@ -47,8 +46,7 @@
 //!
 //! * **Reading order.** Vision returns observations in top-to-bottom order
 //!   of the text blocks it detected; we join top-candidate strings with
-//!   `\n` and do not attempt layout reconstruction. The brief is explicit
-//!   about this: "Do not attempt layout reconstruction".
+//!   `\n` and deliberately do not attempt layout reconstruction.
 
 #![cfg(target_os = "macos")]
 
@@ -72,9 +70,9 @@ use crate::commands::capture::ensure_temp_screenshot_path;
 /// Tauri command worker or any other in-flight IPC.
 #[tauri::command]
 pub async fn recognize_text(image_path: String) -> Result<String, String> {
-    // Reuse the existing path validator — the brief is explicit that this
-    // is "not optional" and the same rationale (don't OCR an attacker-chosen
-    // file) applies here as for every other path-taking command.
+    // Reuse the existing path validator. This is not optional: the same
+    // rationale (don't OCR an attacker-chosen file) applies here as for
+    // every other path-taking command.
     ensure_temp_screenshot_path(&image_path)?;
     let path_buf = std::path::PathBuf::from(&image_path);
     let span = std::time::Instant::now();
@@ -145,8 +143,8 @@ fn recognize_text_blocking(path: &Path) -> Result<String, String> {
         .map(|i| preferred_ns.objectAtIndex(i).to_string())
         .collect();
 
-    // Log the two lists — the brief asks us to "report what the query actually
-    // returned on this machine", and this is the only place that information
+    // Log the two lists: what the query actually returned on this machine
+    // matters when diagnosing, and this is the only place that information
     // lives. The format is fixed so it is greppable in cliptoall.log.
     crate::log(&format!(
         "    [ocr] supported={:?} preferred={:?}",
@@ -166,8 +164,8 @@ fn recognize_text_blocking(path: &Path) -> Result<String, String> {
     if chosen.is_empty() {
         // No overlap. Skip setRecognitionLanguages so Vision keeps its
         // default (English for the accurate model); `automaticallyDetectsLanguage`
-        // is still set below, which is how the brief expects non-preferred
-        // text to be recognised.
+        // is still set below, which is how non-preferred text gets
+        // recognised.
         crate::log("    [ocr] no overlap between supported and preferred languages — relying on auto-detect");
     } else {
         let lang_array = NSArray::from_slice(&chosen.iter().map(|s| &**s).collect::<Vec<_>>());
@@ -177,7 +175,7 @@ fn recognize_text_blocking(path: &Path) -> Result<String, String> {
     // ── Configuration: accurate, with language correction, auto-detect ────
     //
     // 0 = VNRequestTextRecognitionLevelAccurate. Defined in
-    // VNRecognizeTextRequest.h:19. The brief mandates "accurate".
+    // VNRecognizeTextRequest.h:19. We always use "accurate".
     request.setRecognitionLevel(VNRequestTextRecognitionLevel::Accurate);
     request.setUsesLanguageCorrection(true);
     // `automaticallyDetectsLanguage` is gated behind VNRecognizeTextRequestRevision3
@@ -207,14 +205,14 @@ fn recognize_text_blocking(path: &Path) -> Result<String, String> {
     // own reading-order pass (top-to-bottom of detected blocks). For each
     // observation we ask for the single top candidate (`topCandidates:1` —
     // VNRecognizedTextObservation at VNObservation.h:399) and read `.string`
-    // (VNRecognizedText at VNObservation.h:371). The brief is explicit: do
-    // not attempt layout reconstruction — `\n` between observations is the
+    // (VNRecognizedText at VNObservation.h:371). Deliberately no layout
+    // reconstruction — `\n` between observations is the
     // entire job.
     let Some(observations) = request.results() else {
         // `results` is `Option<Retained<...>>`; nil here means the request
         // failed before populating. We already returned Err on
         // performRequests_error above, so a None here is unusual — log and
-        // return empty (the brief: "no text found" is a normal outcome).
+        // return empty ("no text found" is a normal outcome).
         crate::log("    [ocr] request.results() returned None — treating as empty");
         return Ok(String::new());
     };
@@ -284,8 +282,6 @@ fn preferred_languages() -> Result<Retained<NSArray<NSString>>, String> {
     }
     // Ask before sending: an unrecognised selector is an Objective-C
     // exception, which cannot be caught here and would abort the process.
-    // (The whole reason HANDOFF's bug catalogue lists the SMAppService
-    // `mainApp` mistake first.)
     let responds: bool = unsafe {
         msg_send![cls, respondsToSelector: sel!(preferredLanguages)]
     };

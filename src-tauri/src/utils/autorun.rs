@@ -49,7 +49,7 @@ pub fn set_autorun(enable: bool) -> Result<(), String> {
 /// `set_autorun(true)` only runs when the user flips the setting in
 /// Settings.svelte (the call site is `save_settings_to_disk_locked` in
 /// `commands/settings.rs`). The previous "default on" behaviour was changed
-/// in Phase 3 (HANDOFF bug #26's neighbour).
+/// during the macOS port.
 ///
 /// ### Surface real errors
 ///
@@ -183,7 +183,7 @@ mod smapp {
 /// The plist label and filename are derived from `tauri.conf.json`'s
 /// `identifier` (`net.appshub.cliptoall`); if that ever changes, the
 /// migration in `remove_legacy_launch_agent_if_present` would silently miss
-/// the old file. The HANDOFF.md §1 ground rule "Windows is frozen" applies to
+/// the old file. The port's ground rule "Windows is frozen" applies to
 /// Windows code paths; this constant is the single place the old label lives.
 #[cfg(all(target_os = "macos", not(feature = "personal")))]
 const LEGACY_LAUNCH_AGENT_LABEL: &str = "net.appshub.cliptoall";

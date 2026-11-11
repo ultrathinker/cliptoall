@@ -1,6 +1,6 @@
 //! Platform-agnostic geometry types shared between the capture pipeline and
 //! whichever overlay produced the selection (native Win32 overlay on Windows,
-//! the web overlay on macOS — see docs/macos-port/PLAN.md Phase 3).
+//! the web overlay on macOS).
 
 #[derive(Clone, Copy, Debug)]
 pub struct SelectionRect {

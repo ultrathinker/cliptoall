@@ -43,3 +43,11 @@ tauri-build-out.log
 .env
 .env.*
 dist-macos/
+
+# App Store submission drafts and internal notes of the macOS port (kept locally)
+docs/app-store/
+docs/macos-port/HANDOFF.md
+docs/macos-port/PLAN.md
+docs/macos-port/EXECUTION-PLAN.md
+docs/macos-port/APP-STORE-PLAN.md
+docs/macos-port/WORKLOG-*.md

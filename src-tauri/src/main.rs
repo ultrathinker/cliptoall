@@ -845,11 +845,11 @@ fn main() {
         }
     }));
 
-    // Self-test path (gated by env var, see SCK migration brief §3.5).
+    // Self-test path (gated by an env var).
     // This is the only way to verify the new capture path with REAL pixels
     // from the REAL signed app — `cargo test` cannot capture the screen
     // (Screen-Recording TCC grant is tied to the signed application, not
-    // to a test binary) and the agent cannot drive the GUI (no
+    // to a test binary) and automation cannot drive the GUI (no
     // Accessibility grant).
     //
     // Run with:
@@ -864,15 +864,15 @@ fn main() {
     // at a screenshot.
     #[cfg(target_os = "macos")]
     if std::env::var("CLIPTOALL_SELFTEST_CAPTURE").ok().as_deref() == Some("1") {
-        // Force the file logger ON so the orchestrator can read timings
+        // Force the file logger ON so the timings can be read
         // from ~/Library/Application Support/ClipToAll/logs/cliptoall.log.
         LOGGING_ON.store(true, Ordering::Relaxed);
         // Run synchronously on the main thread — spawning then calling
         // std::process::exit was observed to lose the last log lines. The
         // capture itself blocks on an SCK completion handler, which is
         // delivered on SCK's own dispatch queue, not on this thread, so
-        // blocking here does not deadlock (brief §4.6 covers the same point
-        // for the real hot path, which runs on a spawned thread).
+        // blocking here does not deadlock (the same holds for the real hot
+        // path, which runs on a spawned thread).
         let code = sck_selftest::run();
         // Sync the log file so every line above is durable before we exit;
         // std::process::exit() bypasses Drop.

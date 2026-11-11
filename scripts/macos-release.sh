@@ -42,6 +42,15 @@ set -a; [ -f .env.local ] && source .env.local; set +a
 : "${NOTARY_PROFILE:?set NOTARY_PROFILE to your notarytool keychain profile name}"
 export APPLE_SIGNING_IDENTITY
 
+# Keep local paths out of the binary. rustc records the source path of every
+# crate it compiles (panic locations, file!()), including the cargo registry
+# under the builder's home folder; remap them to neutral prefixes. The
+# encoded form (0x1f-separated) survives paths with spaces. It replaces any
+# RUSTFLAGS from the calling shell.
+REPO_ROOT="$(pwd -P)"
+SEP=$'\x1f'
+export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo${SEP}--remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup${SEP}--remap-path-prefix=$REPO_ROOT=/cliptoall"
+
 # (Output is captured first: with pipefail, `cmd | grep -q` can fail when grep
 # exits early and cmd dies of SIGPIPE.)
 IDENTITIES="$(security find-identity -v -p codesigning)"
@@ -85,6 +94,14 @@ APP_BIN="$APP_SRC/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleEx
 [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")" = "$VERSION" ] \
   || { echo "bundle version is not $VERSION" >&2; exit 1; }
 ./scripts/check-plugin-gate.sh --public "$APP_BIN"
+for needle in "$HOME" "$(id -un)" "$REPO_ROOT"; do
+  if LC_ALL=C grep -r -l -aF -- "$needle" "$APP_SRC" >/dev/null; then
+    echo "the app bundle contains a local path or the user name; check the remap flags above" >&2
+    LC_ALL=C grep -r -l -aF -- "$needle" "$APP_SRC" >&2
+    exit 1
+  fi
+done
+echo "ok: no local paths or user name in the app bundle"
 for var in GDRIVE_CLIENT_ID GDRIVE_CLIENT_SECRET; do
   LC_ALL=C grep -aqF -- "${!var}" "$APP_BIN" \
     || { echo "$var is not baked into the binary" >&2; exit 1; }

@@ -27,7 +27,7 @@
 //! | `channel-permutation` | RGBA vs ABGR vs BGRA vs any other systematic swap (bug #22) |
 //! | `colour` | wrong colour space, gamma, or a genuinely wrong image |
 //! | `shear` | row-stride padding handled wrongly (drift grows down the frame) |
-//! | `cursor` | (not automatable — see mx-verify.md) |
+//! | `cursor` | (not automatable; checked by hand) |
 //!
 //! ## The animation hazard
 //!

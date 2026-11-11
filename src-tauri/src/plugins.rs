@@ -255,7 +255,7 @@ impl PluginManager {
     }
 
     /// macOS/Unix: no `.exe` convention, so a plugin is any file with the
-    /// executable bit set (PLAN.md Phase 1.4). Only a REGULAR file qualifies —
+    /// executable bit set. Only a REGULAR file qualifies —
     /// `symlink_metadata` does not follow links, so a symlink (which could
     /// point anywhere outside the plugins dir) is never launched — and not one
     /// that other users could rewrite (group/world-writable).
